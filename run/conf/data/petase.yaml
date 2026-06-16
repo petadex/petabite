@@ -1,0 +1,6 @@
+name: petase
+csv_path: data/sample_petase.csv
+val_frac: 0.1
+test_frac: 0.1
+init_labeled: 3
+max_length: 1024
