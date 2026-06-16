@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import numpy as np
 
@@ -13,7 +12,7 @@ from .selection import export_query, select_top_k
 
 logger = logging.getLogger(__name__)
 
-Record = Dict[str, object]
+Record = dict[str, object]
 
 
 class ActiveLearningLoop:
@@ -40,12 +39,12 @@ class ActiveLearningLoop:
 
     def run_round(
         self,
-        labeled: List[Record],
-        pool: List[Record],
+        labeled: list[Record],
+        pool: list[Record],
         round_idx: int,
         scores: np.ndarray | None = None,
         **score_kwargs: object,
-    ) -> Tuple[List[int], Path]:
+    ) -> tuple[list[int], Path]:
         """Score the pool, select top-K, and export a query CSV.
 
         ``scores`` may be passed precomputed; otherwise the acquisition

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict
 
 import torch
 from torch import nn
@@ -23,7 +22,7 @@ def mc_dropout_predict(
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
     n_samples: int = 20,
-) -> Dict[str, torch.Tensor]:
+) -> dict[str, torch.Tensor]:
     """Run ``n_samples`` stochastic forward passes; return mean and variance.
 
     Returns:

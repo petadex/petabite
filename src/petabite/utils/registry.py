@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, Dict, Type, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -15,12 +16,12 @@ class Registry:
 
     def __init__(self, name: str) -> None:
         self._name = name
-        self._table: Dict[str, Type] = {}
+        self._table: dict[str, type] = {}
 
-    def register(self, key: str) -> Callable[[Type[T]], Type[T]]:
+    def register(self, key: str) -> Callable[[type[T]], type[T]]:
         """Decorator registering a class under ``key``."""
 
-        def decorator(cls: Type[T]) -> Type[T]:
+        def decorator(cls: type[T]) -> type[T]:
             if key in self._table:
                 logger.warning("Overwriting %s registry key '%s'", self._name, key)
             self._table[key] = cls
@@ -28,7 +29,7 @@ class Registry:
 
         return decorator
 
-    def get(self, key: str) -> Type:
+    def get(self, key: str) -> type:
         """Return the class registered under ``key``."""
         if key not in self._table:
             raise KeyError(

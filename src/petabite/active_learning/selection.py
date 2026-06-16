@@ -5,16 +5,15 @@ from __future__ import annotations
 import csv
 import logging
 from pathlib import Path
-from typing import Dict, List
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-Record = Dict[str, object]
+Record = dict[str, object]
 
 
-def select_top_k(scores: np.ndarray, k: int) -> List[int]:
+def select_top_k(scores: np.ndarray, k: int) -> list[int]:
     """Return indices of the top-``k`` highest scores (descending)."""
     if k > len(scores):
         raise ValueError("k exceeds number of scored items")
@@ -22,7 +21,7 @@ def select_top_k(scores: np.ndarray, k: int) -> List[int]:
 
 
 def export_query(
-    pool: List[Record], indices: List[int], out_path: Path, round_idx: int
+    pool: list[Record], indices: list[int], out_path: Path, round_idx: int
 ) -> Path:
     """Write selected pool records to a CSV for wet-lab labeling."""
     out_path.parent.mkdir(parents=True, exist_ok=True)

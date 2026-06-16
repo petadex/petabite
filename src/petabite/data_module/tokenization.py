@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,7 @@ class ESMCTokenizerWrapper:
             "ESM-C tokenizer loading not implemented; wire transformers.AutoTokenizer"
         )
 
-    def encode(self, sequences: List[str]) -> Dict[str, "object"]:
+    def encode(self, sequences: list[str]) -> dict[str, object]:
         """Tokenize a list of sequences into model input tensors."""
         if self._tokenizer is None:
             self._load()

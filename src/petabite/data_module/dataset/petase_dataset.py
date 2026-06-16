@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from torch.utils.data import Dataset
 
@@ -25,8 +24,8 @@ class PETaseDataset(Dataset):
 
     def __init__(
         self,
-        csv_path: Optional[Path] = None,
-        records: Optional[List[Dict[str, object]]] = None,
+        csv_path: Path | None = None,
+        records: list[dict[str, object]] | None = None,
     ) -> None:
         if records is not None:
             self.records = records
@@ -38,5 +37,5 @@ class PETaseDataset(Dataset):
     def __len__(self) -> int:
         return len(self.records)
 
-    def __getitem__(self, idx: int) -> Dict[str, object]:
+    def __getitem__(self, idx: int) -> dict[str, object]:
         return self.records[idx]

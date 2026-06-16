@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
 
 import torch
 from torch import nn
@@ -55,7 +54,7 @@ class ESMCActivityModel(nn.Module):
         # hidden_size is 0 until backbone load is implemented; head built lazily.
         self._head_cls = head_cls
         self._output_dim = output_dim
-        self.head: Optional[nn.Module] = None
+        self.head: nn.Module | None = None
         self.loss_fn = _LOSSES[task]()
 
     def _ensure_head(self) -> None:
@@ -68,14 +67,14 @@ class ESMCActivityModel(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        labels: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
+        labels: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         """Return dict with 'logits' and (if labels given) 'loss'."""
         embeddings = self.backbone(input_ids, attention_mask)
         self._ensure_head()
         assert self.head is not None
         logits = self.head(embeddings)
-        out: Dict[str, torch.Tensor] = {"logits": logits}
+        out: dict[str, torch.Tensor] = {"logits": logits}
         if labels is not None:
             target = labels if self.task == "classification" else labels.float()
             out["loss"] = self.loss_fn(logits.squeeze(-1), target)

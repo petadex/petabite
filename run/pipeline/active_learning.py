@@ -27,7 +27,7 @@ def main(cfg: DictConfig) -> None:
     records = read_activity_csv(Path(cfg.data.csv_path))
     labeled, pool = make_al_split(records, cfg.data.init_labeled, cfg.seed)
 
-    loop = ActiveLearningLoop(
+    _ = ActiveLearningLoop(
         acquisition_name=cfg.active_learning.acquisition_name,
         query_size=min(cfg.active_learning.query_size, len(pool)),
         output_dir=Path(cfg.output_dir),

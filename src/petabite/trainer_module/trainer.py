@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 from torch.utils.data import Dataset
 
@@ -42,7 +41,7 @@ class ActivityTrainer:
         logger.info("Environment: %s", log_environment())
 
     def train(
-        self, train_dataset: Dataset, eval_dataset: Optional[Dataset] = None
+        self, train_dataset: Dataset, eval_dataset: Dataset | None = None
     ) -> None:
         """Run training. Saves reproducibility artifacts then trains."""
         dump_pip_freeze(self.output_dir / "requirements.txt")

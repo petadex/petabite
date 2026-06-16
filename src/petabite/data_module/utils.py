@@ -6,14 +6,13 @@ import csv
 import hashlib
 import logging
 from pathlib import Path
-from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
 REQUIRED_COLUMNS = {"sequence", "label"}
 
 
-def read_activity_csv(path: Path) -> List[Dict[str, object]]:
+def read_activity_csv(path: Path) -> list[dict[str, object]]:
     """Read a PETase activity CSV with columns sequence,label[,id].
 
     Raises:
@@ -28,7 +27,7 @@ def read_activity_csv(path: Path) -> List[Dict[str, object]]:
         missing = REQUIRED_COLUMNS - fieldnames
         if missing:
             raise ValueError(f"CSV {path} missing required columns: {sorted(missing)}")
-        rows: List[Dict[str, object]] = []
+        rows: list[dict[str, object]] = []
         for i, raw in enumerate(reader):
             rows.append(
                 {

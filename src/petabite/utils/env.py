@@ -6,14 +6,13 @@ import logging
 import platform
 import subprocess
 from pathlib import Path
-from typing import Dict
 
 logger = logging.getLogger(__name__)
 
 
-def log_environment() -> Dict[str, str]:
+def log_environment() -> dict[str, str]:
     """Collect environment info for reproducibility logging."""
-    info: Dict[str, str] = {"python_version": platform.python_version()}
+    info: dict[str, str] = {"python_version": platform.python_version()}
     try:
         import torch
 

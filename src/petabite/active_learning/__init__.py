@@ -8,7 +8,7 @@ from .loop import ActiveLearningLoop
 from .selection import export_query, select_top_k
 
 
-def AcquisitionFactory(name: str):
+def AcquisitionFactory(name: str):  # noqa: N802
     """Return the acquisition class registered under ``name``."""
     return ACQUISITION_REGISTRY.get(name)
 
