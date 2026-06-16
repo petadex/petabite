@@ -76,6 +76,9 @@ class ESMCActivityModel(nn.Module):
         logits = self.head(embeddings)
         out: dict[str, torch.Tensor] = {"logits": logits}
         if labels is not None:
-            target = labels if self.task == "classification" else labels.float()
-            out["loss"] = self.loss_fn(logits.squeeze(-1), target)
+            if self.task == "regression":
+                out["loss"] = self.loss_fn(logits.squeeze(-1), labels.float())
+            else:
+                # CrossEntropyLoss expects (N, C) logits and (N,) Long targets.
+                out["loss"] = self.loss_fn(logits, labels.long())
         return out

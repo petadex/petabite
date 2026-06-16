@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import platform
 import subprocess
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,9 @@ def dump_pip_freeze(out_path: Path) -> None:
     """Write ``pip freeze`` output to ``out_path`` for run reproducibility."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
-        ["python", "-m", "pip", "freeze"], capture_output=True, text=True, check=True
+        [sys.executable, "-m", "pip", "freeze"],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     out_path.write_text(result.stdout)

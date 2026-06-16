@@ -1,19 +1,20 @@
+from petabite.utils import Registry
+
 from .backbone import BACKBONE_REGISTRY, ESMCBackbone
 from .heads import HEAD_REGISTRY, ClassificationHead, RegressionHead
 from .model import ESMCActivityModel
 from .uncertainty import enable_dropout, mc_dropout_predict
 
-_MODELS = {"esmc_activity": ESMCActivityModel}
+MODEL_REGISTRY = Registry("model")
+MODEL_REGISTRY.register("esmc_activity")(ESMCActivityModel)
 
 
-def ModelFactory(name: str):  # noqa: N802
+def ModelFactory(name: str) -> type:  # noqa: N802
     """Return the model class registered under ``name``."""
-    if name not in _MODELS:
-        raise KeyError(f"Unknown model '{name}'. Valid: {sorted(_MODELS)}")
-    return _MODELS[name]
+    return MODEL_REGISTRY.get(name)
 
 
-def BackboneFactory(name: str):  # noqa: N802
+def BackboneFactory(name: str) -> type:  # noqa: N802
     """Return the backbone class registered under ``name``."""
     return BACKBONE_REGISTRY.get(name)
 
@@ -25,6 +26,7 @@ __all__ = [
     "ESMCBackbone",
     "RegressionHead",
     "ClassificationHead",
+    "MODEL_REGISTRY",
     "HEAD_REGISTRY",
     "BACKBONE_REGISTRY",
     "mc_dropout_predict",
