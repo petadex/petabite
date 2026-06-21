@@ -1,0 +1,58 @@
+# LoRA masked-language-model fine-tuning (domain adaptation) of ESM-C on the
+# petadex catalytic ORFs. Used by `python -m petabite.mlm_finetune`.
+seed: 42
+output_dir: outputs/esmc-mlm-lora
+
+data:
+  dataset_id: petadex/catalytic-orfs-90pid   # the dataset pushed from the notebook
+  sequence_column: Sequence
+  train_split: train
+  eval_split: validation
+  max_length: 1024
+  mlm_probability: 0.15
+  num_proc: 8
+  # Caps for quick smoke tests; null = use the whole split.
+  max_train_samples: null
+  max_eval_samples: 5000
+
+model:
+  model_id: biohub/ESMC-300M
+  trust_remote_code: true
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.01
+  # ESM-C attention + FFN projections (per the biohub/ESMC-300M fine-tuning card).
+  target_modules:
+    - layernorm_qkv.1
+    - out_proj
+    - ffn.1
+    - ffn.3
+
+trainer:
+  num_train_epochs: 1
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  lr_scheduler_type: cosine
+  logging_steps: 50
+  eval_steps: 1000
+  save_steps: 1000
+  save_total_limit: 3
+  bf16: true            # set false (and fp16: true) on older GPUs without bf16
+  fp16: false
+  gradient_checkpointing: true
+  dataloader_num_workers: 4
+
+wandb:
+  enabled: true
+  project: petabite-esmc-mlm
+  entity: null          # null = your default W&B entity
+  run_name: esmc-300m-lora-mlm
+
+push_to_hub:
+  enabled: false
+  repo_id: petadex/esmc-300m-catalytic-lora
+  private: false
