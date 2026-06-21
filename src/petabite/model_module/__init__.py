@@ -3,7 +3,6 @@ from petabite.utils import Registry
 from .backbone import BACKBONE_REGISTRY, ESMCBackbone
 from .heads import HEAD_REGISTRY, ClassificationHead, RegressionHead
 from .model import ESMCActivityModel
-from .uncertainty import enable_dropout, mc_dropout_predict
 
 MODEL_REGISTRY = Registry("model")
 MODEL_REGISTRY.register("esmc_activity")(ESMCActivityModel)
@@ -29,6 +28,4 @@ __all__ = [
     "MODEL_REGISTRY",
     "HEAD_REGISTRY",
     "BACKBONE_REGISTRY",
-    "mc_dropout_predict",
-    "enable_dropout",
 ]

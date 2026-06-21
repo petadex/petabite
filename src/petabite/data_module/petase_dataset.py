@@ -7,7 +7,7 @@ from pathlib import Path
 
 from torch.utils.data import Dataset
 
-from ..utils import read_activity_csv
+from .utils import read_activity_csv
 
 logger = logging.getLogger(__name__)
 

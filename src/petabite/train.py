@@ -17,7 +17,7 @@ from petabite.utils import setup_logging
 logger = logging.getLogger(__name__)
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="config")
+@hydra.main(version_base=None, config_path="../../config", config_name="config")
 def main(cfg: DictConfig) -> None:
     """Build dataset, model, and trainer from config, then train."""
     setup_logging()

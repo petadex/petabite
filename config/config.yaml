@@ -2,7 +2,6 @@ defaults:
   - data: petase
   - model: esmc_lora
   - trainer: default
-  - active_learning: uncertainty
   - _self_
 
 seed: 42
