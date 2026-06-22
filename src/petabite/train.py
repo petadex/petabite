@@ -1,4 +1,9 @@
-"""Train entrypoint: LoRA fine-tune ESM-C on PETase activity data."""
+"""Train entrypoint: LoRA fine-tune ESM-C on Logan derived PETases and plastic degrading enzyme sequence data.
+
+Run:
+    python -m petabite.train
+    python -m petabite.train model.lora_r=16 trainer.num_train_epochs=10
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,7 @@ from pathlib import Path
 import hydra
 from omegaconf import DictConfig
 
-from petabite.data_module import DatasetFactory, make_splits
+from petabite.data_module import PETaseDataset, make_splits
 from petabite.data_module.tokenization import ESMCTokenizerWrapper
 from petabite.data_module.utils import read_activity_csv
 from petabite.model_module import ModelFactory
@@ -18,7 +23,7 @@ from petabite.utils import setup_logging
 logger = logging.getLogger(__name__)
 
 
-@hydra.main(version_base=None, config_path="../../config", config_name="config")
+@hydra.main(version_base=None, config_path="../../config", config_name="train")
 def main(cfg: DictConfig) -> None:
     """Build dataset, model, and trainer from config, then train."""
     setup_logging()
@@ -26,41 +31,29 @@ def main(cfg: DictConfig) -> None:
     train_recs, val_recs, _ = make_splits(
         records, cfg.data.val_frac, cfg.data.test_frac, cfg.seed
     )
-    dataset_cls = DatasetFactory(cfg.data.name)
-    train_ds = dataset_cls(records=train_recs)
-    val_ds = dataset_cls(records=val_recs)
+    train_ds = PETaseDataset(records=train_recs)
+    val_ds = PETaseDataset(records=val_recs)
 
     model_cls = ModelFactory(cfg.model.name)
     model = model_cls(
         backbone_name=cfg.model.backbone_name,
         task=cfg.model.task,
-        model_name=cfg.model.model_name,
+        model_id=cfg.model.model_id,
         output_dim=cfg.model.output_dim,
         lora_r=cfg.model.lora_r,
         lora_alpha=cfg.model.lora_alpha,
         lora_dropout=cfg.model.lora_dropout,
+        target_modules=list(cfg.model.target_modules),
+        lora_fused=cfg.model.lora_fused,
+        trust_remote_code=cfg.model.trust_remote_code,
     )
 
     tokenizer = ESMCTokenizerWrapper(
-        model_name=cfg.model.model_name,
-        max_length=cfg.data.get("max_length", 1024),
+        model_name=cfg.model.model_id,
+        max_length=cfg.data.max_length,
     )
 
-    trainer_cfg = cfg.get("trainer", {})
-    trainer = PetAITrainer(
-        model=model,
-        output_dir=Path(cfg.output_dir),
-        task=cfg.model.task,
-        seed=cfg.seed,
-        num_train_epochs=trainer_cfg.get("num_train_epochs", 5),
-        per_device_train_batch_size=trainer_cfg.get("per_device_train_batch_size", 8),
-        per_device_eval_batch_size=trainer_cfg.get("per_device_eval_batch_size", 8),
-        learning_rate=trainer_cfg.get("learning_rate", 1e-4),
-        weight_decay=trainer_cfg.get("weight_decay", 0.01),
-        logging_steps=trainer_cfg.get("logging_steps", 10),
-        bf16=trainer_cfg.get("bf16", False),
-    )
-    trainer.train(train_ds, val_ds, tokenizer=tokenizer)
+    PetAITrainer(model=model, cfg=cfg).train(train_ds, val_ds, tokenizer=tokenizer)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,0 @@
-name: esmc_activity
-backbone_name: esmc
-# TODO: set to a real ESM-C HF checkpoint id when wiring the backbone.
-model_name: EvolutionaryScale/esmc-300m-2024-12
-task: regression          # or: classification
-output_dim: 1             # 1 for regression; n_classes for classification
-lora_r: 8
-lora_alpha: 16
-lora_dropout: 0.05

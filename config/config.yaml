@@ -1,8 +1,0 @@
-defaults:
-  - data: petase
-  - model: esmc_lora
-  - trainer: default
-  - _self_
-
-seed: 42
-output_dir: outputs

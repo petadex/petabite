@@ -1,0 +1,56 @@
+# LoRA fine-tuning of ESM-C on labeled PETase activity data.
+# Used by `python -m petabite.train`
+# Run:
+#   python -m petabite.train
+#   python -m petabite.train model.lora_r=16 trainer.num_train_epochs=10
+seed: 42
+output_dir: outputs/esmc-activity
+
+data:
+  csv_path: data/petase_activity.csv   # columns: sequence, label[, id]
+  max_length: 1024
+  val_frac: 0.1
+  test_frac: 0.1
+
+model:
+  name: esmc_activity           # registry key → ESMCActivityModel
+  backbone_name: esmc           # registry key → ESMCBackbone
+  model_id: biohub/ESMC-300M
+  trust_remote_code: true
+  task: regression              # or: classification
+  output_dim: 1                 # 1 for regression; n_classes for classification
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  lora_fused: true              # inject custom LoRA into fused QKV/FFN modules
+  target_modules:
+    - out_proj
+
+trainer:
+  num_train_epochs: 5
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  lr_scheduler_type: cosine
+  logging_steps: 10
+  eval_steps: 100
+  save_steps: 500
+  save_total_limit: 3
+  bf16: true
+  fp16: false
+  gradient_checkpointing: false
+  dataloader_num_workers: 4
+
+wandb:
+  enabled: false
+  project: petabite-activity
+  entity: null
+  run_name: esmc-activity-lora
+
+push_to_hub:
+  enabled: false
+  repo_id: petadex/esmc-activity-lora
+  private: false
