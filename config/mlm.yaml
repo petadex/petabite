@@ -21,12 +21,14 @@ model:
   lora_r: 8
   lora_alpha: 16
   lora_dropout: 0.01
-  # ESM-C attention + FFN projections (per the biohub/ESMC-300M fine-tuning card).
+  # PEFT LoRA target: out_proj is the only standard nn.Linear in each block.
+  # The QKV and FFN layers are fused (_PyTorchLayerNormLinear / _PyTorchLayerNormMLP)
+  # and handled separately via lora_fused below.
   target_modules:
-    - layernorm_qkv.1
     - out_proj
-    - ffn.1
-    - ffn.3
+  # Inject custom LoRA into the fused QKV and FFN modules (not possible via PEFT).
+  # Set false to revert to out_proj-only training.
+  lora_fused: true
 
 trainer:
   num_train_epochs: 1
@@ -48,7 +50,7 @@ trainer:
 
 wandb:
   enabled: true
-  project: petabite-esmc-mlm
+  project: petabite-esmc
   entity: null          # null = your default W&B entity
   run_name: esmc-300m-lora-mlm
 

@@ -28,6 +28,7 @@ from transformers import (
     TrainingArguments,
 )
 
+from petabite.model_module.backbone.fused_lora import inject_fused_lora
 from petabite.utils import dump_pip_freeze, log_environment, set_seed, setup_logging
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,17 @@ def main(cfg: DictConfig) -> None:
     model = AutoModelForMaskedLM.from_pretrained(
         cfg.model.model_id, trust_remote_code=cfg.model.trust_remote_code
     )
+
+    # Custom LoRA for fused QKV and FFN modules (not targetable via PEFT).
+    if cfg.model.get("lora_fused", False):
+        inject_fused_lora(
+            model,
+            r=cfg.model.lora_r,
+            alpha=cfg.model.lora_alpha,
+            dropout=cfg.model.lora_dropout,
+        )
+
+    # PEFT LoRA for out_proj (standard nn.Linear in each attention block).
     lora_config = LoraConfig(
         r=cfg.model.lora_r,
         lora_alpha=cfg.model.lora_alpha,

@@ -28,12 +28,15 @@ def log_environment() -> dict[str, str]:
 
 
 def dump_pip_freeze(out_path: Path) -> None:
-    """Write ``pip freeze`` output to ``out_path`` for run reproducibility."""
+    """Write installed-package list to ``out_path`` for run reproducibility.
+
+    Tries ``uv pip freeze`` first (works in uv-managed venvs that have no pip
+    binary), then falls back to ``python -m pip freeze``.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "freeze"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    out_path.write_text(result.stdout)
+    for cmd in (["uv", "pip", "freeze"], [sys.executable, "-m", "pip", "freeze"]):
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            out_path.write_text(result.stdout)
+            return
+    logger.warning("pip freeze failed; requirements.txt will not be written")

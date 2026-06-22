@@ -9,9 +9,10 @@ import hydra
 from omegaconf import DictConfig
 
 from petabite.data_module import DatasetFactory, make_splits
+from petabite.data_module.tokenization import ESMCTokenizerWrapper
 from petabite.data_module.utils import read_activity_csv
 from petabite.model_module import ModelFactory
-from petabite.trainer_module import ActivityTrainer
+from petabite.trainer_module import PetAITrainer
 from petabite.utils import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -39,13 +40,27 @@ def main(cfg: DictConfig) -> None:
         lora_alpha=cfg.model.lora_alpha,
         lora_dropout=cfg.model.lora_dropout,
     )
-    trainer = ActivityTrainer(
+
+    tokenizer = ESMCTokenizerWrapper(
+        model_name=cfg.model.model_name,
+        max_length=cfg.data.get("max_length", 1024),
+    )
+
+    trainer_cfg = cfg.get("trainer", {})
+    trainer = PetAITrainer(
         model=model,
         output_dir=Path(cfg.output_dir),
         task=cfg.model.task,
         seed=cfg.seed,
+        num_train_epochs=trainer_cfg.get("num_train_epochs", 5),
+        per_device_train_batch_size=trainer_cfg.get("per_device_train_batch_size", 8),
+        per_device_eval_batch_size=trainer_cfg.get("per_device_eval_batch_size", 8),
+        learning_rate=trainer_cfg.get("learning_rate", 1e-4),
+        weight_decay=trainer_cfg.get("weight_decay", 0.01),
+        logging_steps=trainer_cfg.get("logging_steps", 10),
+        bf16=trainer_cfg.get("bf16", False),
     )
-    trainer.train(train_ds, val_ds)
+    trainer.train(train_ds, val_ds, tokenizer=tokenizer)
 
 
 if __name__ == "__main__":

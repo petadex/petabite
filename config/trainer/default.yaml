@@ -4,3 +4,4 @@ per_device_eval_batch_size: 8
 learning_rate: 1.0e-4
 weight_decay: 0.01
 logging_steps: 10
+bf16: true            # set false (and use fp16) on older GPUs without bf16

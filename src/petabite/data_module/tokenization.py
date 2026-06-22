@@ -21,17 +21,20 @@ class ESMCTokenizerWrapper:
         self._tokenizer = None  # lazy-loaded
 
     def _load(self) -> None:
-        # TODO: load HF tokenizer:
-        #   from transformers import AutoTokenizer
-        #   self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        raise NotImplementedError(
-            "ESM-C tokenizer loading not implemented; wire transformers.AutoTokenizer"
+        from transformers import AutoTokenizer
+
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            self.model_name, trust_remote_code=True
         )
 
     def encode(self, sequences: list[str]) -> dict[str, object]:
         """Tokenize a list of sequences into model input tensors."""
         if self._tokenizer is None:
             self._load()
-        # TODO: return self._tokenizer(sequences, padding=True, truncation=True,
-        #   max_length=self.max_length, return_tensors="pt")
-        raise NotImplementedError("ESM-C tokenization not implemented")
+        return self._tokenizer(
+            sequences,
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )

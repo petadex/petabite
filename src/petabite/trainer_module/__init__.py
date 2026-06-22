@@ -1,4 +1,4 @@
 from .metrics import classification_metrics, regression_metrics
-from .trainer import ActivityTrainer
+from .trainer import PetAITrainer
 
-__all__ = ["ActivityTrainer", "regression_metrics", "classification_metrics"]
+__all__ = ["PetAITrainer", "regression_metrics", "classification_metrics"]
