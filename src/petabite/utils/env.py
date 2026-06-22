@@ -1,4 +1,9 @@
-"""Reproducibility: environment recording."""
+"""Reproducibility utilities: environment snapshot and pip freeze.
+
+Each training run (Stage 1 PlasticESM or Stage 2 activity) saves its resolved
+config and a full pip freeze alongside the checkpoint so any run can be exactly
+reproduced from the Logan-derived data and the same environment.
+"""
 
 from __future__ import annotations
 

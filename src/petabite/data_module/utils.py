@@ -1,4 +1,10 @@
-"""Data IO and hashing utilities."""
+"""Data IO utilities for wet-lab activity CSVs.
+
+Reads and validates the CSV files produced by the iGEM wet-lab team after each
+assay round. Expected columns: sequence (amino acid string), label (activity
+measurement), and an optional id. The dataset_hash utility fingerprints each CSV
+so training runs can be tied back to the exact assay data they were trained on.
+"""
 
 from __future__ import annotations
 

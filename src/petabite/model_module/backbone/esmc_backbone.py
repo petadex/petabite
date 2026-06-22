@@ -1,4 +1,10 @@
-"""ESM-C backbone with LoRA adapters (HuggingFace + peft)."""
+"""ESM-C backbone with LoRA adapters for PETase activity modelling.
+
+Used in Stage 2 (activity prediction) to encode plastic-degrading enzyme sequences
+into pooled embeddings. The backbone is initialized from biohub/ESMC-300M (or
+a PlasticESM checkpoint produced by Stage 1 MLM fine-tuning on the Logan-derived
+PETadex) and kept frozen; only LoRA adapters are trained.
+"""
 
 from __future__ import annotations
 

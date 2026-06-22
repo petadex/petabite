@@ -1,4 +1,10 @@
-"""ESM-C tokenizer wrapper (HuggingFace)."""
+"""ESM-C tokenizer wrapper for PETase sequence encoding.
+
+Provides a thin convenience layer around the HuggingFace ESM-C tokenizer so that
+both the Stage 1 MLM pipeline (mlm_finetune.py) and the Stage 2 activity pipeline
+(train.py) can encode Logan-derived PETadex sequences with consistent padding,
+truncation, and tensor output.
+"""
 
 from __future__ import annotations
 

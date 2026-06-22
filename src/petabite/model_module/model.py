@@ -1,4 +1,10 @@
-"""Composed ESM-C activity model: backbone + task head."""
+"""Stage 2 activity model: PlasticESM backbone + regression or classification head.
+
+ESMCActivityModel composes an ESM-C backbone (optionally initialized from a
+PlasticESM checkpoint from Stage 1 Logan MLM pre-training) with a lightweight MLP
+head that maps pooled sequence embeddings to wet-lab activity measurements.
+Supports both continuous activity regression and binary/multi-class classification.
+"""
 
 from __future__ import annotations
 

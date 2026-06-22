@@ -1,4 +1,13 @@
-"""Predict entrypoint: run inference on a CSV of sequences."""
+"""Stage 2 inference: score PETadex candidates with the trained activity model.
+
+Takes a CSV of Logan-derived PETase sequences (from the PETadex fragment library
+or an active-learning candidate pool) and outputs predicted activity scores.
+Top-ranked sequences are handed to the iGEM wet-lab team for experimental
+validation, closing the active-learning feedback loop.
+
+Run:
+    python -m petabite.predict data.csv_path=candidates.csv
+"""
 
 from __future__ import annotations
 

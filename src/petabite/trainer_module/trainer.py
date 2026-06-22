@@ -1,4 +1,10 @@
-"""PetAI training wrapper around HuggingFace Trainer."""
+"""Stage 2 — PetAI activity trainer: supervised fine-tuning on wet-lab assay data.
+
+Wraps HuggingFace Trainer to map PETase sequences → activity scores using the
+PlasticESM backbone (Stage 1) plus a task head. Wet-lab assay measurements from
+the iGEM team feed into this trainer in an active-learning loop: model predicts,
+wet lab validates, data returns, model improves.
+"""
 
 from __future__ import annotations
 

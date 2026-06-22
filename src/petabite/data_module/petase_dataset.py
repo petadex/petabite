@@ -1,4 +1,12 @@
-"""PETase activity dataset."""
+"""Stage 2 dataset: wet-lab PETase activity measurements.
+
+Wraps assay data returned by the iGEM wet-lab team — sequences selected from the
+Logan-derived PETadex fragment library and their measured PET-degradation activity.
+Each record has a sequence, a numeric label (activity score or class), and an
+optional id. Records flow into the active-learning loop: model predicts on
+unlabelled PETadex candidates, wet lab validates the top picks, new labels are
+appended here, and Stage 2 retrains.
+"""
 
 from __future__ import annotations
 

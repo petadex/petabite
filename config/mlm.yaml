@@ -1,5 +1,9 @@
-# LoRA masked-language-model fine-tuning (domain adaptation) of ESM-C on the
-# petadex catalytic ORFs. Used by `python -m petabite.mlm_finetune`.
+# Stage 1 — PlasticESM: domain-adapt ESM-C on the Logan-derived PETadex.
+# The PETadex (petadex/catalytic-orfs-90pid) is ~300M plastic-degrading enzyme
+# homologs mined from the Logan planetary-scale SRA assembly. Continued
+# pretraining with the masked-LM objective produces PlasticESM, the domain-
+# adapted backbone used in Stage 2 activity prediction and Stage 3 generation.
+# Used by `python -m petabite.mlm_finetune`.
 seed: 42
 output_dir: outputs/esmc-mlm-lora
 

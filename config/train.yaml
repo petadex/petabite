@@ -1,4 +1,8 @@
-# LoRA fine-tuning of ESM-C on labeled PETase activity data.
+# Stage 2 — activity prediction: supervised fine-tuning on wet-lab assay data.
+# The PlasticESM backbone (from Stage 1 Logan MLM pre-training) is paired with
+# a regression or classification head and trained on PETase activity measurements
+# returned by the iGEM wet-lab team. Each wet-lab assay round produces a new CSV
+# that is added here; the model is retrained to close the active-learning loop.
 # Used by `python -m petabite.train`
 # Run:
 #   python -m petabite.train

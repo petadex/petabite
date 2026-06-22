@@ -1,9 +1,11 @@
 """Custom LoRA adapters for ESM-C's fused LayerNorm+Linear modules.
 
-biohub/ESMC uses _PyTorchLayerNormLinear (QKV) and _PyTorchLayerNormMLP (FFN)
-which are not nn.Linear subclasses, so PEFT cannot wrap them. This module
-replaces each with a thin LoRA wrapper that re-runs the base forward and adds
-a low-rank delta at the same point in the computation graph.
+biohub/ESMC fuses QKV projection + LayerNorm into _PyTorchLayerNormLinear and
+FFN + LayerNorm into _PyTorchLayerNormMLP. Neither is an nn.Linear subclass so
+PEFT cannot wrap them. This module replaces each with a thin LoRA wrapper that
+re-runs the same forward pass and adds a low-rank delta at the correct point in
+the computation graph — covering QKV, fc1, and fc2 in addition to the out_proj
+that PEFT handles, giving full-block LoRA coverage across the PlasticESM backbone.
 """
 
 from __future__ import annotations

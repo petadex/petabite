@@ -1,4 +1,8 @@
-"""Regression head for continuous activity prediction."""
+"""Regression head: maps PlasticESM embeddings to continuous activity scores.
+
+Used in Stage 2 when the wet-lab assay returns a quantitative PET-degradation
+measurement (e.g. HPLC-measured monomer release rate) rather than a class label.
+"""
 
 from __future__ import annotations
 

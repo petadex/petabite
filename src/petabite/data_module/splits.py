@@ -1,4 +1,9 @@
-"""Train/val/test and active-learning splits."""
+"""Train/val/test splits for wet-lab activity data.
+
+The PETadex sequences used in Stage 2 are already 90%-identity dereplicated
+(Logan 90pid centroids), so a plain random split is safe — no cluster leakage.
+The active-learning split helpers will live here as wet-lab rounds accumulate.
+"""
 
 from __future__ import annotations
 
