@@ -148,10 +148,6 @@ def main(cfg: DictConfig) -> None:
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
-    if cfg.trainer.gradient_checkpointing:
-        # PEFT + gradient checkpointing needs input grads enabled and cache off.
-        model.enable_input_require_grads()
-        model.config.use_cache = False
 
     # --- Train ---
     output_dir = Path(cfg.output_dir)
@@ -166,7 +162,7 @@ def main(cfg: DictConfig) -> None:
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         data_collator=collator,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
     trainer.train()
     trainer.save_model(str(output_dir))  # saves the LoRA adapter

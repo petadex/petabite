@@ -49,7 +49,7 @@ trainer:
   dataloader_num_workers: 4
 
 wandb:
-  enabled: false
+  enabled: true
   project: petabite-activity
   entity: null
   run_name: esmc-activity-lora

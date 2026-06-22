@@ -49,7 +49,7 @@ trainer:
   save_total_limit: 3
   bf16: true            # set false (and fp16: true) on older GPUs without bf16
   fp16: false
-  gradient_checkpointing: true
+  gradient_checkpointing: false
   dataloader_num_workers: 4
 
 wandb:
