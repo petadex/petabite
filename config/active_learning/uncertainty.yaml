@@ -1,4 +1,0 @@
-acquisition_name: uncertainty
-query_size: 16
-n_mc_samples: 20
-n_rounds: 5

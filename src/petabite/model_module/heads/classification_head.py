@@ -1,4 +1,8 @@
-"""Classification head for binned/active-inactive activity prediction."""
+"""Classification head: maps PlasticESM embeddings to activity class logits.
+
+Used in Stage 2 when wet-lab assay data is binarized (active/inactive) or
+binned into discrete activity tiers rather than reported as a continuous score.
+"""
 
 from __future__ import annotations
 

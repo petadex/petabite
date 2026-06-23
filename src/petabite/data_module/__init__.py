@@ -1,8 +1,13 @@
 from torch.utils.data import Dataset
 
-from .dataset import DATASET_REGISTRY, PETaseDataset
-from .splits import make_al_split, make_splits
+from petabite.utils import Registry
+
+from .petase_dataset import PETaseDataset
+from .splits import make_splits
 from .tokenization import ESMCTokenizerWrapper
+
+DATASET_REGISTRY = Registry("dataset")
+DATASET_REGISTRY.register("petase")(PETaseDataset)
 
 
 def DatasetFactory(name: str) -> type[Dataset]:  # noqa: N802
@@ -16,5 +21,4 @@ __all__ = [
     "PETaseDataset",
     "ESMCTokenizerWrapper",
     "make_splits",
-    "make_al_split",
 ]

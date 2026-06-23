@@ -1,4 +1,10 @@
-"""Task metrics for regression and classification."""
+"""Activity prediction metrics for regression and classification.
+
+Regression (continuous activity score): RMSE, R², Spearman ρ.
+Classification (active/inactive or activity bins): accuracy, macro F1.
+Both are reported after each eval round so the active-learning loop can track
+model improvement as wet-lab data accumulates.
+"""
 
 from __future__ import annotations
 

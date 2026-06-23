@@ -1,4 +1,4 @@
-"""Petabite: ESM-C fine-tuning for PETase activity prediction with active learning."""
+"""Petabite: ESM-C LoRA fine-tuning for PETase activity prediction."""
 
 __version__ = "0.1.0"
 

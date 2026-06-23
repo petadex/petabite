@@ -1,4 +1,10 @@
-"""Composed ESM-C activity model: backbone + task head."""
+"""Stage 2 activity model: PlasticESM backbone + regression or classification head.
+
+ESMCActivityModel composes an ESM-C backbone (optionally initialized from a
+PlasticESM checkpoint from Stage 1 Logan MLM pre-training) with a lightweight MLP
+head that maps pooled sequence embeddings to wet-lab activity measurements.
+Supports both continuous activity regression and binary/multi-class classification.
+"""
 
 from __future__ import annotations
 
@@ -24,20 +30,26 @@ class ESMCActivityModel(nn.Module):
     Args:
         backbone_name: registry key for the backbone (e.g. "esmc").
         task: "regression" or "classification".
-        model_name: HF checkpoint id passed to the backbone.
+        model_id: HF checkpoint id passed to the backbone.
         output_dim: head output dim (1 for regression, n_classes for clf).
         lora_r / lora_alpha / lora_dropout: LoRA hyperparameters.
+        target_modules: PEFT LoRA target module name suffixes.
+        lora_fused: inject custom LoRA into fused QKV/FFN modules.
+        trust_remote_code: passed to the backbone's from_pretrained.
     """
 
     def __init__(
         self,
         backbone_name: str,
         task: str,
-        model_name: str,
+        model_id: str,
         output_dim: int = 1,
         lora_r: int = 8,
-        lora_alpha: int = 16,
+        lora_alpha: float = 16.0,
         lora_dropout: float = 0.05,
+        target_modules: list[str] | None = None,
+        lora_fused: bool = False,
+        trust_remote_code: bool = True,
     ) -> None:
         super().__init__()
         if task not in _LOSSES:
@@ -45,13 +57,15 @@ class ESMCActivityModel(nn.Module):
         self.task = task
         backbone_cls = BACKBONE_REGISTRY.get(backbone_name)
         self.backbone = backbone_cls(
-            model_name=model_name,
+            model_id=model_id,
             lora_r=lora_r,
             lora_alpha=lora_alpha,
             lora_dropout=lora_dropout,
+            target_modules=target_modules,
+            lora_fused=lora_fused,
+            trust_remote_code=trust_remote_code,
         )
         head_cls = HEAD_REGISTRY.get(task)
-        # hidden_size is 0 until backbone load is implemented; head built lazily.
         self._head_cls = head_cls
         self._output_dim = output_dim
         self.head: nn.Module | None = None
@@ -79,6 +93,5 @@ class ESMCActivityModel(nn.Module):
             if self.task == "regression":
                 out["loss"] = self.loss_fn(logits.squeeze(-1), labels.float())
             else:
-                # CrossEntropyLoss expects (N, C) logits and (N,) Long targets.
                 out["loss"] = self.loss_fn(logits, labels.long())
         return out
