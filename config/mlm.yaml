@@ -5,7 +5,7 @@
 # adapted backbone used in Stage 2 activity prediction and Stage 3 generation.
 # Used by `python -m petabite.mlm_finetune`.
 seed: 42
-output_dir: outputs/esmc-mlm-lora
+output_dir: outputs/esmc-mlm-lora-bs16-r32
 
 data:
   dataset_id: petadex/catalytic-orfs-90pid   # the dataset pushed from the notebook
@@ -22,7 +22,7 @@ data:
 model:
   model_id: biohub/ESMC-300M
   trust_remote_code: true
-  lora_r: 8
+  lora_r: 32
   lora_alpha: 16
   lora_dropout: 0.01
   # PEFT LoRA target: out_proj is the only standard nn.Linear in each block.
@@ -36,8 +36,8 @@ model:
 
 trainer:
   num_train_epochs: 1
-  per_device_train_batch_size: 8
-  per_device_eval_batch_size: 8
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 16
   gradient_accumulation_steps: 1
   learning_rate: 1.0e-4
   weight_decay: 0.01
@@ -56,7 +56,7 @@ wandb:
   enabled: true
   project: petabite-esmc
   entity: null          # null = your default W&B entity
-  run_name: esmc-300m-lora-mlm
+  run_name: esmc-300m-lora-mlm-bs16-r32
 
 push_to_hub:
   enabled: false

@@ -224,3 +224,4 @@ __marimo__/
 # Petabite
 outputs/
 wandb/
+.claude/
