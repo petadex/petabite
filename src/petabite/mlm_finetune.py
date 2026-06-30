@@ -25,7 +25,7 @@ from pathlib import Path
 import hydra
 from datasets import load_dataset
 from omegaconf import DictConfig, OmegaConf
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
     AutoModelForMaskedLM,
     AutoTokenizer,
@@ -145,6 +145,11 @@ def main(cfg: DictConfig) -> None:
         lora_dropout=cfg.model.lora_dropout,
         target_modules=list(cfg.model.target_modules),
         bias="none",
+        # ESM-C is an encoder used here for masked-LM domain adaptation. PEFT has no
+        # MASKED_LM task type; FEATURE_EXTRACTION keeps the backbone head-free and,
+        # critically, writes a non-null task_type to adapter_config.json (the Hub's
+        # model-card validator rejects a null peft.task_type).
+        task_type=TaskType.FEATURE_EXTRACTION,
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
