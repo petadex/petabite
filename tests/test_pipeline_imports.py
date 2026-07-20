@@ -11,6 +11,5 @@ def _load(name: str):
 
 
 def test_pipeline_modules_expose_main():
-    for name in ["train", "predict", "mlm_finetune"]:
-        mod = _load(name)
-        assert hasattr(mod, "main"), f"{name}.py must define main()"
+    mod = _load("mlm_finetune")
+    assert hasattr(mod, "main"), "mlm_finetune.py must define main()"

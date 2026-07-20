@@ -1,7 +1,7 @@
 [project]
 name = "petabite"
 version = "0.1.0"
-description = "ESM-C LoRA fine-tuning for PETase activity prediction"
+description = "ESM-C LoRA masked-LM fine-tuning on the Logan-derived PETadex"
 requires-python = ">=3.10"
 # Deep-learning / HF stack, installed from the Compute Canada wheelhouse with
 # `pip install --no-index <pkgs>`. numpy/scipy/scikit-learn are provided by the
@@ -44,6 +44,9 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP"]
+# `import torch.nn.functional as F` is the universal PyTorch spelling; renaming it
+# would be less readable than the lint it trips.
+ignore = ["N812"]
 
 [tool.mypy]
 python_version = "3.10"

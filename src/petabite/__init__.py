@@ -1,4 +1,4 @@
-"""Petabite: ESM-C LoRA fine-tuning for PETase activity prediction."""
+"""Petabite: ESM-C LoRA masked-LM fine-tuning on the Logan-derived PETadex."""
 
 __version__ = "0.1.0"
 
