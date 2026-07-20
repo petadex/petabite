@@ -45,6 +45,37 @@ def read_activity_csv(path: Path) -> list[dict[str, object]]:
     return rows
 
 
+def read_sequence_csv(path: Path) -> list[dict[str, object]]:
+    """Read an unlabelled candidate CSV with columns sequence[,id].
+
+    Inference runs on PETadex candidates that have no activity measurement yet, so
+    unlike :func:`read_activity_csv` this does not require a ``label`` column. A
+    ``label`` column is carried through when present so predictions can be scored
+    against a held-out set.
+
+    Raises:
+        FileNotFoundError: if ``path`` does not exist.
+        ValueError: if the ``sequence`` column is missing.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"Candidate CSV not found: {path}")
+    with path.open(newline="") as f:
+        reader = csv.DictReader(f)
+        fieldnames = set(reader.fieldnames or [])
+        if "sequence" not in fieldnames:
+            raise ValueError(f"CSV {path} missing required column: 'sequence'")
+        rows: list[dict[str, object]] = []
+        for i, raw in enumerate(reader):
+            row: dict[str, object] = {
+                "id": raw.get("id", str(i)),
+                "sequence": raw["sequence"].strip(),
+            }
+            if raw.get("label") not in (None, ""):
+                row["label"] = float(raw["label"])
+            rows.append(row)
+    return rows
+
+
 def dataset_hash(path: Path) -> str:
     """Return a 12-char SHA256 prefix of the dataset file for version tracking."""
     sha = hashlib.sha256()

@@ -9,6 +9,10 @@ truncation, and tensor output.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # keep this module import-light; torch is only needed for the type
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -24,20 +28,20 @@ class ESMCTokenizerWrapper:
     def __init__(self, model_name: str, max_length: int = 1024) -> None:
         self.model_name = model_name
         self.max_length = max_length
-        self._tokenizer = None  # lazy-loaded
+        self._tokenizer: Any | None = None  # lazy-loaded on first encode()
 
-    def _load(self) -> None:
+    def _load(self) -> Any:
         from transformers import AutoTokenizer
 
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            self.model_name, trust_remote_code=True
-        )
+        return AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
 
-    def encode(self, sequences: list[str]) -> dict[str, object]:
+    def encode(self, sequences: list[str]) -> dict[str, torch.Tensor]:
         """Tokenize a list of sequences into model input tensors."""
-        if self._tokenizer is None:
-            self._load()
-        return self._tokenizer(
+        tokenizer = self._tokenizer
+        if tokenizer is None:
+            tokenizer = self._load()
+            self._tokenizer = tokenizer
+        return tokenizer(
             sequences,
             padding=True,
             truncation=True,

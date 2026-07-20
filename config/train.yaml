@@ -27,6 +27,10 @@ model:
   lora_alpha: 16
   lora_dropout: 0.05
   lora_fused: true              # inject custom LoRA into fused QKV/FFN modules
+  # Stage 1 fused QKV/FFN weights (fused_lora.safetensors, written next to the PEFT
+  # adapter by mlm_finetune). Leave null to train Stage 2 fused adapters from scratch;
+  # point at the Stage 1 output_dir to carry PlasticESM's attention/FFN adaptation over.
+  fused_lora_path: null
   target_modules:
     - out_proj
 
@@ -58,3 +62,11 @@ push_to_hub:
   enabled: false
   repo_id: petadex/esmc-activity-lora
   private: false
+
+# Used by `python -m petabite.predict`. data.csv_path supplies the candidates and
+# needs only a `sequence` column (an `id` and `label` are carried through if present).
+predict:
+  checkpoint_dir: null    # null = output_dir above
+  output_csv: null        # null = <checkpoint_dir>/predictions.csv
+  batch_size: null        # null = trainer.per_device_eval_batch_size
+  device: auto            # auto | cuda | mps | cpu
