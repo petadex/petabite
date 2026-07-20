@@ -51,6 +51,11 @@ trainer:
   fp16: false
   gradient_checkpointing: false
   dataloader_num_workers: 4
+  # null = fresh run; true = resume the latest checkpoint in output_dir; or a path.
+  # Resuming requires fused_lora.safetensors in that checkpoint — runs from before
+  # fused-LoRA saving existed will refuse to resume rather than silently drop the
+  # QKV/FFN adapters.
+  resume_from_checkpoint: null
 
 wandb:
   enabled: true

@@ -13,7 +13,7 @@ import logging
 import torch
 from torch import nn
 
-from petabite.model_module.backbone.fused_lora import inject_fused_lora
+from petabite.model_module.backbone.fused_lora import inject_fused_lora, load_fused_lora
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,10 @@ class ESMCBackbone(nn.Module):
         lora_fused: if True, also inject custom LoRA into the fused QKV/FFN
             modules (_PyTorchLayerNormLinear / _PyTorchLayerNormMLP) that PEFT
             cannot target.
+        fused_lora_path: directory or file holding fused_lora.safetensors from a
+            Stage 1 run. Required to reuse trained fused weights — without it the
+            fused adapters are freshly initialized (lora_B zeroed, i.e. no-ops),
+            so a Stage 1 checkpoint would contribute only its out_proj adapter.
         trust_remote_code: passed to from_pretrained.
     """
 
@@ -43,6 +47,7 @@ class ESMCBackbone(nn.Module):
         lora_dropout: float = 0.05,
         target_modules: list[str] | None = None,
         lora_fused: bool = False,
+        fused_lora_path: str | None = None,
         trust_remote_code: bool = True,
     ) -> None:
         super().__init__()
@@ -60,6 +65,19 @@ class ESMCBackbone(nn.Module):
 
         if lora_fused:
             inject_fused_lora(base, r=lora_r, alpha=lora_alpha, dropout=lora_dropout)
+            if fused_lora_path:
+                load_fused_lora(base, fused_lora_path)
+            else:
+                logger.warning(
+                    "lora_fused=True with no fused_lora_path: fused QKV/FFN adapters "
+                    "start from scratch. Set model.fused_lora_path to reuse Stage 1 "
+                    "weights."
+                )
+        elif fused_lora_path:
+            raise ValueError(
+                "fused_lora_path is set but lora_fused=False; the fused modules would "
+                "never be injected and the weights would be silently ignored."
+            )
 
         lora_cfg = LoraConfig(
             r=lora_r,
