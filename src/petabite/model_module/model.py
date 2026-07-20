@@ -35,6 +35,7 @@ class ESMCActivityModel(nn.Module):
         lora_r / lora_alpha / lora_dropout: LoRA hyperparameters.
         target_modules: PEFT LoRA target module name suffixes.
         lora_fused: inject custom LoRA into fused QKV/FFN modules.
+        fused_lora_path: Stage 1 fused_lora.safetensors to initialize those modules.
         trust_remote_code: passed to the backbone's from_pretrained.
     """
 
@@ -49,6 +50,7 @@ class ESMCActivityModel(nn.Module):
         lora_dropout: float = 0.05,
         target_modules: list[str] | None = None,
         lora_fused: bool = False,
+        fused_lora_path: str | None = None,
         trust_remote_code: bool = True,
     ) -> None:
         super().__init__()
@@ -63,19 +65,18 @@ class ESMCActivityModel(nn.Module):
             lora_dropout=lora_dropout,
             target_modules=target_modules,
             lora_fused=lora_fused,
+            fused_lora_path=fused_lora_path,
             trust_remote_code=trust_remote_code,
         )
+        # Built eagerly: HF Trainer snapshots named_parameters() when it creates the
+        # optimizer, before the first forward. A head constructed lazily inside
+        # forward() would never enter the optimizer and would stay at its random
+        # init for the whole run.
         head_cls = HEAD_REGISTRY.get(task)
-        self._head_cls = head_cls
-        self._output_dim = output_dim
-        self.head: nn.Module | None = None
+        self.head = head_cls(
+            input_dim=self.backbone.hidden_size, output_dim=output_dim
+        )
         self.loss_fn = _LOSSES[task]()
-
-    def _ensure_head(self) -> None:
-        if self.head is None:
-            self.head = self._head_cls(
-                input_dim=self.backbone.hidden_size, output_dim=self._output_dim
-            )
 
     def forward(
         self,
@@ -85,8 +86,6 @@ class ESMCActivityModel(nn.Module):
     ) -> dict[str, torch.Tensor]:
         """Return dict with 'logits' and (if labels given) 'loss'."""
         embeddings = self.backbone(input_ids, attention_mask)
-        self._ensure_head()
-        assert self.head is not None
         logits = self.head(embeddings)
         out: dict[str, torch.Tensor] = {"logits": logits}
         if labels is not None:
