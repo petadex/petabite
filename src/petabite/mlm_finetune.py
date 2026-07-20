@@ -7,8 +7,8 @@ objective, producing PlasticESM — a foundation model that 'understands' PETase
 diversity before any activity labels are introduced.
 
 Only LoRA adapters are trained; backbone weights stay frozen. The resulting adapter
-is the backbone for Stage 2 (activity prediction) and eventually Stage 3
-(conditioned sequence generation).
+is the starting point for downstream activity work, which lives outside this repo —
+this repo does MLM fine-tuning and nothing else.
 
 Run:
     python -m petabite.mlm_finetune                       # uses config/mlm.yaml
@@ -35,7 +35,7 @@ from transformers import (
     TrainingArguments,
 )
 
-from petabite.model_module.backbone.fused_lora import (
+from petabite.model_module.fused_lora import (
     FUSED_LORA_FILENAME,
     inject_fused_lora,
     save_fused_lora,

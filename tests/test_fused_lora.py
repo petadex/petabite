@@ -13,7 +13,7 @@ import pytest
 import torch
 from torch import nn
 
-from petabite.model_module.backbone.fused_lora import (
+from petabite.model_module.fused_lora import (
     FUSED_LORA_FILENAME,
     LoRALayerNormLinear,
     LoRALayerNormMLP,

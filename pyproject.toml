@@ -1,7 +1,7 @@
 [project]
 name = "petabite"
 version = "0.1.0"
-description = "ESM-C LoRA fine-tuning for PETase activity prediction"
+description = "ESM-C LoRA masked-LM fine-tuning on the Logan-derived PETadex"
 requires-python = ">=3.10"
 # Deep-learning / HF stack, installed from the Compute Canada wheelhouse with
 # `pip install --no-index <pkgs>`. numpy/scipy/scikit-learn are provided by the

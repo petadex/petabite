@@ -19,7 +19,7 @@ from pathlib import Path
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 from transformers.trainer_utils import get_last_checkpoint
 
-from petabite.model_module.backbone.fused_lora import (
+from petabite.model_module.fused_lora import (
     FUSED_LORA_FILENAME,
     load_fused_lora,
     save_fused_lora,
