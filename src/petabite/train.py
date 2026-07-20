@@ -1,4 +1,5 @@
-"""Train entrypoint: LoRA fine-tune ESM-C on Logan derived PETases and plastic degrading enzyme sequence data.
+"""Train entrypoint: LoRA fine-tune ESM-C on Logan-derived PETases and other
+plastic-degrading enzyme sequence data.
 
 Run:
     python -m petabite.train
@@ -15,7 +16,7 @@ from omegaconf import DictConfig
 
 from petabite.data_module import PETaseDataset, make_splits
 from petabite.data_module.tokenization import ESMCTokenizerWrapper
-from petabite.data_module.utils import read_activity_csv
+from petabite.data_module.utils import dataset_hash, read_activity_csv
 from petabite.model_module import ModelFactory
 from petabite.trainer_module import PetAITrainer
 from petabite.utils import setup_logging
@@ -27,7 +28,14 @@ logger = logging.getLogger(__name__)
 def main(cfg: DictConfig) -> None:
     """Build dataset, model, and trainer from config, then train."""
     setup_logging()
-    records = read_activity_csv(Path(cfg.data.csv_path))
+    csv_path = Path(cfg.data.csv_path)
+    records = read_activity_csv(csv_path)
+    # Ties the run to the exact assay round it trained on; wet-lab CSVs grow between
+    # active-learning rounds and are otherwise indistinguishable from the artifacts.
+    logger.info(
+        "Activity data: %s (%d records, sha256:%s)",
+        csv_path, len(records), dataset_hash(csv_path),
+    )
     train_recs, val_recs, _ = make_splits(
         records, cfg.data.val_frac, cfg.data.test_frac, cfg.seed
     )
@@ -45,6 +53,7 @@ def main(cfg: DictConfig) -> None:
         lora_dropout=cfg.model.lora_dropout,
         target_modules=list(cfg.model.target_modules),
         lora_fused=cfg.model.lora_fused,
+        fused_lora_path=cfg.model.get("fused_lora_path"),
         trust_remote_code=cfg.model.trust_remote_code,
     )
 
