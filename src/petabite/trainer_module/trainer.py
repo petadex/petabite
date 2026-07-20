@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
+from torch import nn
 from torch.utils.data import Dataset
 from transformers import Trainer, TrainingArguments
 
@@ -94,7 +95,7 @@ class PetAITrainer:
         cfg: the full resolved Hydra config (train.yaml).
     """
 
-    def __init__(self, model: object, cfg: DictConfig) -> None:
+    def __init__(self, model: nn.Module, cfg: DictConfig) -> None:
         set_seed(cfg.seed)
         self.model = model
         self.cfg = cfg
@@ -140,13 +141,34 @@ class PetAITrainer:
         trainer.save_model(str(self.output_dir))
 
         if self.cfg.push_to_hub.enabled:
-            logger.info("Pushing to %s", self.cfg.push_to_hub.repo_id)
-            self.model.push_to_hub(
-                self.cfg.push_to_hub.repo_id,
-                private=self.cfg.push_to_hub.private,
-            )
+            self._push_to_hub()
 
         logger.info("Training complete. Checkpoint saved to %s", self.output_dir)
+
+    def _push_to_hub(self) -> None:
+        """Upload the output directory to the Hub.
+
+        ``ESMCActivityModel`` is a plain ``nn.Module``, so it has no ``push_to_hub``
+        of its own — the backbone's LoRA adapter, the head weights, and the head
+        config all live in ``output_dir`` as files. Upload the folder instead.
+        """
+        from huggingface_hub import HfApi
+
+        repo_id = self.cfg.push_to_hub.repo_id
+        logger.info("Pushing %s to %s", self.output_dir, repo_id)
+        api = HfApi()
+        api.create_repo(
+            repo_id,
+            repo_type="model",
+            private=self.cfg.push_to_hub.private,
+            exist_ok=True,
+        )
+        api.upload_folder(
+            folder_path=str(self.output_dir),
+            repo_id=repo_id,
+            repo_type="model",
+            commit_message="Upload PETase activity model",
+        )
 
     def _compute_metrics(self, eval_pred: Any) -> dict[str, float]:
         logits, labels = eval_pred
