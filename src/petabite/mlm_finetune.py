@@ -249,13 +249,18 @@ def tokenize_corpus(
     )
 
 
-class MlmCollator:
-    """Pads and masks a batch, dropping the bookkeeping columns.
+# The only keys the collator should ever see. Everything else on the dataset is
+# bookkeeping: `length` has to stay for the length-grouped sampler, and the
+# pre-tokenized corpus also carries `c60_id` so that resampling one member per
+# 60%-identity cluster stays possible without rebuilding. Passing either to
+# DataCollatorForLanguageModeling makes it try to pad an integer as if it were a
+# sequence, so this is a whitelist rather than a list of things to drop: a new
+# bookkeeping column should not be able to break collation.
+MODEL_INPUT_KEYS = ("input_ids", "attention_mask", "special_tokens_mask")
 
-    ``length`` has to stay on the dataset for the length-grouped sampler, but
-    ``DataCollatorForLanguageModeling`` would try to pad it as if it were a
-    sequence.
-    """
+
+class MlmCollator:
+    """Pads and masks a batch, keeping only the model's own inputs."""
 
     def __init__(self, tokenizer: PreTrainedTokenizerFast, mlm_probability: float) -> None:
         self.inner = DataCollatorForLanguageModeling(
@@ -264,7 +269,7 @@ class MlmCollator:
 
     def __call__(self, features: list[dict]) -> dict[str, torch.Tensor]:
         trimmed = [
-            {k: v for k, v in feature.items() if k != LENGTH_COLUMN}
+            {k: v for k, v in feature.items() if k in MODEL_INPUT_KEYS}
             for feature in features
         ]
         return self.inner(trimmed)
