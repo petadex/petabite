@@ -1,6 +1,8 @@
 # PetaBite
+# Large corpora only. activate_petabite.sh is deliberately NOT ignored:
+# it is the environment bootstrap, and a fresh clone cannot build the
+# environment without it.
 data/
-activate_petabite.sh
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -225,3 +227,7 @@ __marimo__/
 outputs/
 wandb/
 .claude/
+# SLURM job logs and run outputs
+logs/
+outputs/
+wandb/
