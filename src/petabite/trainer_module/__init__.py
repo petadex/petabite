@@ -1,3 +1,3 @@
-from .fused_lora_callback import FusedLoRASaveCallback
+from .lora_callback import LoraSaveCallback
 
-__all__ = ["FusedLoRASaveCallback"]
+__all__ = ["LoraSaveCallback"]

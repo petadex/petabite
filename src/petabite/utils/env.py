@@ -1,8 +1,8 @@
-"""Reproducibility utilities: environment snapshot and pip freeze.
+"""Reproducibility utilities: environment snapshot and package list.
 
-Each training run (Stage 1 PlasticESM or Stage 2 activity) saves its resolved
-config and a full pip freeze alongside the checkpoint so any run can be exactly
-reproduced from the Logan-derived data and the same environment.
+Each training run saves its resolved config and the installed-package list
+alongside the checkpoint, so a checkpoint found later can be matched to the code
+and the environment that produced it.
 """
 
 from __future__ import annotations
@@ -33,15 +33,32 @@ def log_environment() -> dict[str, str]:
 
 
 def dump_pip_freeze(out_path: Path) -> None:
-    """Write installed-package list to ``out_path`` for run reproducibility.
+    """Write the installed-package list to ``out_path``.
 
-    Tries ``uv pip freeze`` first (works in uv-managed venvs that have no pip
-    binary), then falls back to ``python -m pip freeze``.
+    This used to try ``uv pip freeze`` first and fall back to pip. The fallback
+    was unreachable: ``subprocess.run`` raises ``FileNotFoundError`` when the
+    executable is missing rather than returning a non-zero code, so on a machine
+    without ``uv`` the whole run died here, after the model had already loaded.
+    This environment is module-loaded plus a venv and has no ``uv`` at all.
+
+    Failing to record the package list is never worth losing a run over, so
+    everything here is best effort.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    for cmd in (["uv", "pip", "freeze"], [sys.executable, "-m", "pip", "freeze"]):
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            out_path.write_text(result.stdout)
-            return
-    logger.warning("pip freeze failed; requirements.txt will not be written")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "freeze"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        logger.warning("could not run pip freeze (%s); %s not written", exc, out_path)
+        return
+
+    if result.returncode != 0:
+        logger.warning(
+            "pip freeze exited %d; %s not written", result.returncode, out_path
+        )
+        return
+    out_path.write_text(result.stdout)
