@@ -34,8 +34,15 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.trainer_pt_utils import LengthGroupedSampler
 
-from petabite.data_module import load_esmc_tokenizer, load_tokenized, split_tokenized
+from petabite.data_module import (
+    TokenizedSplit,
+    load_esmc_tokenizer,
+    load_tokenized,
+    read_lengths,
+    split_tokenized,
+)
 from petabite.model_module.lora import (
     LoraConfig,
     apply_lora,
@@ -146,29 +153,40 @@ def enable_fast_matmul() -> None:
 
 def prepare_datasets(
     cfg: DictConfig, tokenizer: PreTrainedTokenizerFast
-) -> tuple[Dataset, Dataset]:
-    """Return the train and eval sets, pre-tokenized if a cache was built.
+) -> TokenizedSplit:
+    """Return the train and eval sets plus the train lengths.
 
     Assembling 18,172,960 rows and tokenizing them costs minutes at the start
     of every job, repeated for every rung of an ablation ladder. Build the cache
-    once with ``scripts/pretokenize_corpus.py`` and set ``data.tokenized_path``.
+    once with ``scripts/build_c60_corpus.py`` and set ``data.tokenized_path``.
+
+    The lengths come back alongside the splits because length-grouped batching
+    needs them as a plain list, and recovering them from a shuffled dataset
+    afterwards is pathologically slow. See
+    :func:`petabite.data_module.tokenized.read_lengths`.
     """
     tokenized_path = cfg.data.get("tokenized_path")
     if tokenized_path:
         corpus = load_tokenized(tokenized_path)
         corpus = _cap(corpus, cfg.data.max_train_samples, "corpus")
         eval_size = min(cfg.data.max_eval_samples, len(corpus) // 10)
-        train, evaluation = split_tokenized(corpus, eval_size, cfg.seed)
+        split = split_tokenized(corpus, eval_size, cfg.seed)
         logger.info(
-            "Pre-tokenized corpus: %d train, %d eval", len(train), len(evaluation)
+            "Pre-tokenized corpus: %d train, %d eval",
+            len(split.train), len(split.evaluation),
         )
-        return train, evaluation
+        return split
 
     raw = load_dataset(cfg.data.dataset_id)
     train_raw, eval_raw = select_splits(raw, cfg)
     train = tokenize_corpus(train_raw, tokenizer, cfg, "Tokenizing train")
     evaluation = tokenize_corpus(eval_raw, tokenizer, cfg, "Tokenizing eval")
-    return train, evaluation
+    # Freshly mapped datasets are in storage order, so this is the cheap read.
+    return TokenizedSplit(
+        train=train,
+        evaluation=evaluation,
+        train_lengths=read_lengths(train).tolist(),
+    )
 
 
 def select_splits(corpus: DatasetDict, cfg: DictConfig) -> tuple[Dataset, Dataset]:
@@ -320,9 +338,37 @@ class MlmTrainer(Trainer):
       ``TypeError: 'EsmcMaskedLMOutput' object is not subscriptable``.
     """
 
-    def __init__(self, *args, compute_sae: bool = False, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        compute_sae: bool = False,
+        train_lengths: list[int] | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.compute_sae = compute_sae
+        self.train_lengths = train_lengths
+
+    def _get_train_sampler(self, train_dataset=None):
+        """Build the length-grouped sampler from lengths we already hold.
+
+        The base implementation reads them with
+        ``train_dataset[args.length_column_name]``. On ``datasets`` 5.0.0 that
+        is a lazy ``Column``, not a list, and the sampler then indexes it once
+        per comparison while sorting each megabatch. At 3.6 ms per lookup and
+        roughly 23.5M lookups for this corpus, building the batch order alone
+        takes about 24 hours, and it happens before the first step: the run
+        sits at 0% GPU looking merely slow rather than broken.
+
+        Passing the lengths in as a plain list brings that to 1.3 s.
+        """
+        if not self.args.group_by_length or self.train_lengths is None:
+            return super()._get_train_sampler(train_dataset)
+
+        return LengthGroupedSampler(
+            self.args.train_batch_size * self.args.gradient_accumulation_steps,
+            lengths=self.train_lengths,
+        )
 
     def compute_loss(
         self, model, inputs, return_outputs=False, num_items_in_batch=None
@@ -400,8 +446,11 @@ def main(cfg: DictConfig) -> None:
     # Needed either way: even a pre-tokenized corpus needs the mask token for
     # the collator.
     tokenizer = load_esmc_tokenizer(cfg.model.model_id, cfg.data.max_length)
-    train_ds, eval_ds = prepare_datasets(cfg, tokenizer)
-    logger.info("Training on %d sequences, evaluating on %d", len(train_ds), len(eval_ds))
+    split = prepare_datasets(cfg, tokenizer)
+    logger.info(
+        "Training on %d sequences, evaluating on %d",
+        len(split.train), len(split.evaluation),
+    )
 
     model, lora_cfg = build_lora_model(cfg)
 
@@ -416,10 +465,11 @@ def main(cfg: DictConfig) -> None:
     trainer = MlmTrainer(
         model=model,
         args=build_training_args(cfg, report_to),
-        train_dataset=train_ds,
-        eval_dataset=eval_ds,
+        train_dataset=split.train,
+        eval_dataset=split.evaluation,
         data_collator=MlmCollator(tokenizer, cfg.data.mlm_probability),
         compute_sae=cfg.model.compute_sae,
+        train_lengths=split.train_lengths,
         # Trainer cannot save or restore this model's adapters on its own, so
         # this is what puts them in every checkpoint and reloads them on resume.
         callbacks=[LoraSaveCallback(lora_cfg, resume_from_checkpoint=resume)],

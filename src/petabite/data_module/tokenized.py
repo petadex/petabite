@@ -13,13 +13,18 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 from datasets import Dataset, concatenate_datasets, load_from_disk
 
 logger = logging.getLogger(__name__)
 
 MANIFEST_NAME = "manifest.json"
+
+# Column written by the corpus builders and read by length-grouped batching.
+LENGTH_COLUMN = "length"
 
 
 def load_tokenized(path: str | Path) -> Dataset:
@@ -54,7 +59,7 @@ def load_tokenized(path: str | Path) -> Dataset:
             path, len(dataset),
         )
 
-    expected = {"input_ids", "length"}
+    expected = {"input_ids", LENGTH_COLUMN}
     missing = expected - set(dataset.column_names)
     if missing:
         raise ValueError(
@@ -64,21 +69,70 @@ def load_tokenized(path: str | Path) -> Dataset:
     return dataset
 
 
-def split_tokenized(
-    dataset: Dataset, eval_size: int, seed: int
-) -> tuple[Dataset, Dataset]:
-    """Shuffle once, then take a held-out tail for evaluation.
+def read_lengths(dataset: Dataset) -> np.ndarray:
+    """Read the length column straight out of Arrow, in storage order.
+
+    Going through ``dataset["length"]`` is not an option at corpus scale. On
+    ``datasets`` 5.0.0 that returns a lazy ``Column`` rather than a list, and
+    each element access costs about 3.6 ms. Anything that indexes it per
+    element, which is what the length-grouped sampler does, becomes unusable:
+    1.8M sequences need roughly 23.5M lookups, which is about 24 hours of doing
+    nothing.
+
+    Reading the Arrow column directly takes 0.018 s for the same data.
+
+    The result is in *storage* order, so it only lines up with a dataset that
+    has no indices mapping. :func:`split_tokenized` is what keeps the alignment
+    honest for the shuffled splits.
+    """
+    if dataset._indices is not None:
+        raise ValueError(
+            "read_lengths needs a dataset in storage order, but this one carries "
+            "an indices mapping from a shuffle or select. Use split_tokenized, "
+            "which tracks its own permutation."
+        )
+    column = dataset.data.column(LENGTH_COLUMN)
+    return column.to_numpy(zero_copy_only=False)
+
+
+@dataclass
+class TokenizedSplit:
+    """A train/eval split plus the train lengths, kept aligned.
+
+    The lengths travel with the split because the only cheap way to get them is
+    to reorder the storage-order column by the same permutation used to build
+    the split. Recovering them afterwards from the shuffled dataset is the slow
+    path described in :func:`read_lengths`.
+    """
+
+    train: Dataset
+    evaluation: Dataset
+    train_lengths: list[int]
+
+
+def split_tokenized(dataset: Dataset, eval_size: int, seed: int) -> TokenizedSplit:
+    """Shuffle once, hold out an evaluation slice, and keep the train lengths.
 
     The shuffle matters because the shards arrive in corpus order, which is
     grouped by origin: the head is NCBI nr and the long tail is Logan. An
     unshuffled tail would evaluate on Logan only.
+
+    The permutation is drawn here rather than delegated to
+    ``Dataset.shuffle`` so that the same ordering can be applied to the length
+    column, which is what makes length-grouped batching affordable.
     """
     if eval_size >= len(dataset):
         raise ValueError(
             f"eval_size {eval_size} is not smaller than the corpus "
             f"({len(dataset)} sequences)"
         )
-    shuffled = dataset.shuffle(seed=seed)
-    evaluation = shuffled.select(range(eval_size))
-    train = shuffled.select(range(eval_size, len(shuffled)))
-    return train, evaluation
+
+    lengths = read_lengths(dataset)
+    permutation = np.random.default_rng(seed).permutation(len(dataset))
+    eval_indices, train_indices = permutation[:eval_size], permutation[eval_size:]
+
+    return TokenizedSplit(
+        train=dataset.select(train_indices),
+        evaluation=dataset.select(eval_indices),
+        train_lengths=lengths[train_indices].tolist(),
+    )
