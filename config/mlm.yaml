@@ -36,9 +36,9 @@ model:
   trust_remote_code: true
 
   lora_r: 32
-  # alpha/r is the scaling applied to the low-rank branch, so 16/32 scales it
-  # by 0.5.
-  lora_alpha: 16
+  # alpha/r is the scaling applied to the low-rank branch, so 64/32 scales it
+  # by 2.0. alpha below r damps the adapter, which is rarely what is wanted.
+  lora_alpha: 64
   lora_dropout: 0.01
 
   # The four projections in an ESM-C block. `qkv` and `out_proj` are attention,
