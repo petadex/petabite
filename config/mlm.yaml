@@ -22,7 +22,9 @@ data:
   # Used only when eval_split is absent, in which case this many rows are held
   # out of the tail of train.
   eval_holdout_size: 5000
-  max_length: 1024
+  # The corpus median is 306 residues, so 1024 roughly doubles attention cost
+  # to cover a small tail.
+  max_length: 512
   mlm_probability: 0.15
   num_proc: 8
   # Caps for quick smoke tests; null = use the whole split.
@@ -58,9 +60,14 @@ trainer:
   # -1 means train for num_train_epochs. Set a positive value for smoke tests.
   max_steps: -1
 
-  per_device_train_batch_size: 16
-  per_device_eval_batch_size: 16
-  gradient_accumulation_steps: 1
+  # Measured on one L40S (scripts/benchmark.sbatch, job 6308203). Batch 32
+  # peaks at 31.2 GB of 46 GB for 26.6k tokens/s. Batch 48 peaks at 44.1 GB
+  # for 27.5k tokens/s, which buys 3% for almost no memory headroom.
+  per_device_train_batch_size: 32
+  per_device_eval_batch_size: 32
+  # 32 x ~308 median tokens is about 9.9k tokens per step, so 6 accumulation
+  # steps gives the ~60k-token batch that keeps the GPU saturated.
+  gradient_accumulation_steps: 6
 
   learning_rate: 1.0e-4
   weight_decay: 0.01
@@ -81,14 +88,15 @@ trainer:
   # recomputing them would just cost time.
   gradient_checkpointing: false
 
-  dataloader_num_workers: 4
+  dataloader_num_workers: 8
   dataloader_pin_memory: true
-  dataloader_persistent_workers: false
+  dataloader_persistent_workers: true
   # Buckets similar lengths together so a batch is not padded out to its
   # longest member. The length column is added during tokenization.
-  group_by_length: false
+  group_by_length: true
   length_column_name: length
-  optim: adamw_torch
+  # Fused AdamW keeps the optimizer step off the critical path.
+  optim: adamw_torch_fused
 
   # null = fresh run; true = resume the latest checkpoint in output_dir; or a
   # path. Resuming requires lora_adapters.safetensors in that checkpoint: a
