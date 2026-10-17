@@ -55,6 +55,9 @@ NUM_SAMPLING_STEPS = 50
 CONTACT_RADIUS = 8.0
 NEIGHBOUR_RADIUS = 10.0
 
+# How many of the longest sequences to fold before shuffling the remainder.
+LONGEST_FIRST = 3
+
 
 def read_fasta(path: Path) -> dict[str, str]:
     """The sequences to fold, chosen by a step in the other environment.
@@ -204,7 +207,14 @@ def main() -> int:
     args = parser.parse_args()
 
     sequences = read_fasta(args.sequences)
-    names = sorted(sequences, key=lambda name: -len(sequences[name]))
+    # The longest few first, so a memory problem appears in the first
+    # structure rather than hours in, then the rest shuffled. Folding the
+    # whole set longest-first would mean a timeout left a length-biased
+    # subset, and length is one of the controls this has to beat.
+    by_length = sorted(sequences, key=lambda name: -len(sequences[name]))
+    head, tail = by_length[:LONGEST_FIRST], by_length[LONGEST_FIRST:]
+    np.random.default_rng(0).shuffle(tail)
+    names = head + list(tail)
     if args.limit:
         names = names[: args.limit]
     lengths = [len(sequences[name]) for name in names]
@@ -216,8 +226,14 @@ def main() -> int:
     # The native loader, not EsmFold2HFAdapter. The adapter wraps the port in
     # transformers and job 6354254 found it needs transformers 5.16.0.dev0,
     # which this environment does not have; esm 3.4.1 ships the model itself.
-    model = EsmFold2Model.from_pretrained(
-        MODEL_ID, device="cuda", dtype=torch.bfloat16)
+    #
+    # No dtype override. Job 6354314 passed bfloat16 and the distogram head
+    # failed with "mat1 and mat2 must have the same dtype", because it is
+    # handed an fp32 tensor. The loader's default keeps the trunk in fp32 and
+    # casts only the bundled ESMC, through esmc_precision, which is the
+    # combination it supports.
+    model = EsmFold2Model.from_pretrained(MODEL_ID, device="cuda",
+                                          esmc_precision="bf16")
     builder = ESMFold2InputBuilder()
     print("model loaded")
 
@@ -246,7 +262,7 @@ def main() -> int:
         embeddings.append(embedding if embedding is not None
                           else np.zeros(1, dtype=np.float32))
 
-        if position % 10 == 0 or position == len(names):
+        if position == 1 or position % 5 == 0 or position == len(names):
             elapsed = time.time() - started
             print(f"  {position}/{len(names)}  {elapsed / position:.1f}s each, "
                   f"{elapsed / 60:.1f}min so far, "
