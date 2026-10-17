@@ -184,6 +184,11 @@ def score_set(x: np.ndarray, y: np.ndarray, groups: list[str],
 
     score = spearmanr(averaged, medians).statistic
     low, high = stats.bootstrap_ci(medians, averaged, sequence_groups)
+    # Both intervals, because the bootstrap turned out to exclude zero in 12%
+    # to 22% of null draws against a nominal 5%, while the jackknife never
+    # duplicates a component. See `stats.jackknife_ci`.
+    jack_low, jack_high = stats.jackknife_ci(medians, averaged,
+                                             sequence_groups)
     permutation = stats.permutation_p(medians, averaged, sequence_groups)
 
     # The measurement-level correlation is kept as a diagnostic, because a
@@ -196,6 +201,7 @@ def score_set(x: np.ndarray, y: np.ndarray, groups: list[str],
         "dim": int(x.shape[1]),
         "spearman": round(float(score), 3) if np.isfinite(score) else None,
         "ci95": [low, high],
+        "jackknife95": [jack_low, jack_high],
         "permutation_p": permutation,
         "n_scored_sequences": len(medians),
         "measurement_level_spearman": (round(float(measurement_score), 3)
@@ -283,8 +289,8 @@ def evaluate(target: str, include_llm: bool, index: dict[str, int], cached,
     # aggregated sweep. `rho` is the headline, one point per sequence; `meas`
     # is the same fit scored over measurement rows, kept only as a diagnostic,
     # since it weights each sequence by how often it was assayed.
-    print(f"  {'features':24} {'dim':>4} {'rho':>7} {'meas':>7} "
-          f"{'per-fold':>9} {'p':>7}  CI")
+    print(f"  {'features':24} {'dim':>4} {'rho':>7} "
+          f"{'per-fold':>9} {'p':>7}  {'jackknife 95%':>23}  bootstrap 95%")
     scores_with_protocol: dict[str, float | None] = {}
     scores_alone: dict[str, float | None] = {}
 
@@ -306,9 +312,10 @@ def evaluate(target: str, include_llm: bool, index: dict[str, int], cached,
 
             print(f"  {name + ' ' + suffix:24} {entry['dim']:>4} "
                   f"{str(entry['spearman']):>7} "
-                  f"{str(entry['measurement_level_spearman']):>7} "
                   f"{str(entry['per_fold_mean']):>9} "
-                  f"{entry['permutation_p']:>7}  {entry['ci95']}")
+                  f"{entry['permutation_p']:>7}  "
+                  f"jack {str(entry['jackknife95']):>18}  "
+                  f"boot {entry['ci95']}")
 
     result["verdict_with_protocol"] = verdict(scores_with_protocol)
     result["verdict_alone"] = verdict(scores_alone)
