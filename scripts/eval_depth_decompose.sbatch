@@ -85,9 +85,14 @@ recognition = decompose(
 check("family recognition alone is 1 between families",
       recognition["between_families"] == 1.0,
       f"  {recognition['between_families']}")
-check("family recognition alone is 0 within families",
-      recognition["within_families"] == 0.0,
-      f"  {recognition['within_families']}")
+# There is no within-family ordering to score here, and the honest answer is
+# that the question does not apply rather than a number. A first pass of this
+# gate read +0.056, which was a rank correlation over floating point dust.
+check("family recognition alone has no within-family part",
+      recognition["within_families"] is None
+      and recognition["within_is_degenerate"],
+      f"  {recognition['within_families']}, "
+      f"degenerate {recognition['within_is_degenerate']}")
 
 # And the mirror image: a prediction holding only each sequence's deviation
 # from its own family mean has the within part and no between part.
@@ -97,7 +102,9 @@ ranking = decompose(rows,
                     np.array([deviation[m.seq_md5] for m in rows]),
                     components)
 check("within-family ranking alone is 1 within families",
-      ranking["within_families"] == 1.0, f"  {ranking['within_families']}")
+      ranking["within_families"] == 1.0
+      and not ranking["within_is_degenerate"],
+      f"  {ranking['within_families']}")
 check("within-family ranking alone is near 0 between families",
       abs(ranking["between_families"]) < 0.5,
       f"  {ranking['between_families']}")
