@@ -30,7 +30,6 @@ from pathlib import Path
 
 import numpy as np
 from scipy.stats import spearmanr
-from sklearn.linear_model import Ridge
 from sklearn.model_selection import KFold
 
 from petabite.eval_module import labels, stats
@@ -39,7 +38,8 @@ FEATURE_SETS = ("length", "composition", "stock", "plasticesm")
 
 
 def random_out_of_fold(x: np.ndarray, y: np.ndarray, seed: int = 0,
-                       n_splits: int = 5) -> np.ndarray:
+                       n_splits: int = 5,
+                       standardise: bool = False) -> np.ndarray:
     """Out-of-fold predictions from a plain shuffled split.
 
     No group structure at all: homologs of a held-out sequence are free to sit
@@ -53,8 +53,11 @@ def random_out_of_fold(x: np.ndarray, y: np.ndarray, seed: int = 0,
         # Alpha is chosen by a nested random split, to keep the comparison
         # with the grouped protocol about the split and nothing else.
         inner = [str(i % 5) for i in range(len(fit))]
-        alpha = stats.pick_alpha(x[fit], y[fit], inner)
-        predicted[held] = Ridge(alpha=alpha).fit(x[fit], y[fit]).predict(x[held])
+        alpha = stats.pick_alpha(x[fit], y[fit], inner, standardise)
+        fold = stats.fit_predict(x[fit], y[fit], x[held], alpha, standardise)
+        # Centred per fold for the same reason the grouped protocol is, so the
+        # two sides of the comparison differ only in how the split was made.
+        predicted[held] = stats.centre_fold(fold)
     return predicted
 
 
@@ -80,7 +83,8 @@ def nearest_training_identity(groups: list[str]) -> dict:
 
 
 def compare(target: str, include_llm: bool, components: dict[str, str],
-            index: dict[str, int], features: dict[str, np.ndarray]) -> dict:
+            index: dict[str, int], features: dict[str, np.ndarray],
+            standardise: bool) -> dict:
     """Both protocols, every feature set, for one target."""
     measurements = labels.read_measurements(target, include_llm=include_llm)
     per_sequence = labels.aggregate(measurements)
@@ -113,13 +117,15 @@ def compare(target: str, include_llm: bool, components: dict[str, str],
         # couple of hundred points is itself noisy.
         random_scores = []
         for seed in range(5):
-            predicted = random_out_of_fold(x, y, seed=seed)
+            predicted = random_out_of_fold(x, y, seed=seed,
+                                           standardise=standardise)
             score = spearmanr(predicted, y).statistic
             if np.isfinite(score):
                 random_scores.append(float(score))
         random_rho = float(np.mean(random_scores)) if random_scores else None
 
-        grouped = stats.grouped_out_of_fold(x, y, groups, n_splits=5)
+        grouped = stats.grouped_out_of_fold(x, y, groups, n_splits=5,
+                                            standardise=standardise)
         grouped_rho = spearmanr(grouped, y).statistic
         grouped_rho = float(grouped_rho) if np.isfinite(grouped_rho) else None
 
@@ -145,6 +151,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--embeddings", type=Path, required=True)
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument("--standardise", action="store_true",
+                        help="z-score features per fold, so one alpha grid "
+                             "means the same thing for a length column and a "
+                             "960-dimensional embedding")
     parser.add_argument("--include-llm", action="store_true")
     parser.add_argument("--targets", nargs="*", default=list(labels.TARGETS))
     args = parser.parse_args()
@@ -159,7 +169,8 @@ def main() -> int:
     print(f"llm labels included: {args.include_llm}\n")
 
     results = {
-        target: compare(target, args.include_llm, components, index, features)
+        target: compare(target, args.include_llm, components, index, features,
+                        args.standardise)
         for target in args.targets
     }
 

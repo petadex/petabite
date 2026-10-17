@@ -23,10 +23,13 @@ from scipy.stats import spearmanr
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import GroupKFold
 
-# Ridge penalties tried at every fit. The range is wide because the feature
-# sets differ by three orders of magnitude in width, from a single length
-# column to a 960-dimensional embedding.
-ALPHAS = (0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0)
+# Ridge penalties tried at every fit. The range has to be this wide for two
+# reasons. The feature sets differ by three orders of magnitude in width, from
+# a single length column to a 960-dimensional embedding. And with 73 sequences
+# against 960 columns the useful regime is heavy shrinkage: on the p-np-c4
+# stratum the standardised score was still climbing at the old grid's top
+# value of 10,000, so the grid was truncated exactly where the answer was.
+ALPHAS = (0.1, 1.0, 10.0, 100.0, 1000.0, 10_000.0, 100_000.0, 1_000_000.0)
 
 
 def group_rows(groups: list[str]) -> dict[str, list[int]]:
@@ -37,58 +40,173 @@ def group_rows(groups: list[str]) -> dict[str, list[int]]:
     return dict(by_group)
 
 
-def pick_alpha(x: np.ndarray, y: np.ndarray, groups: list[str]) -> float:
+def fit_scaler(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Column means and standard deviations, for z-scoring features.
+
+    Needed because a ridge penalty is not scale invariant: the same alpha
+    applied to features with standard deviation 0.008 and 26.8, which is the
+    range across ESM-C's layers, is two completely different amounts of
+    regularisation. Any comparison between feature sets of different scale has
+    to standardise first or it is comparing penalties rather than
+    representations.
+    """
+    centre = x.mean(axis=0)
+    scale = x.std(axis=0)
+    scale[scale < 1e-9] = 1.0
+    return centre, scale
+
+
+def apply_scaler(x: np.ndarray, scaler: tuple[np.ndarray, np.ndarray]) -> np.ndarray:
+    centre, scale = scaler
+    return (x - centre) / scale
+
+
+def fit_predict(x_fit, y_fit, x_held, alpha: float,
+                 standardise: bool) -> np.ndarray:
+    """One ridge fit, with the scaler estimated on the fitting rows only.
+
+    Estimating it on all rows would leak the held-out distribution into the
+    fit, which is a small leak but an unnecessary one.
+    """
+    if standardise:
+        scaler = fit_scaler(x_fit)
+        x_fit, x_held = apply_scaler(x_fit, scaler), apply_scaler(x_held, scaler)
+    return Ridge(alpha=alpha).fit(x_fit, y_fit).predict(x_held)
+
+
+def pick_alpha(x: np.ndarray, y: np.ndarray, groups: list[str],
+               standardise: bool = False) -> float:
     """Choose a ridge penalty by grouped CV inside the fitting data only.
 
-    Called from within an outer fold, so the held-out components of that
-    outer fold are not visible here and cannot influence the choice.
+    Called from within an outer fold, so the held-out components of that outer
+    fold are not visible here and cannot influence the choice.
+
+    Selection is by the one-standard-error rule rather than by the best mean:
+    among the penalties scoring within one standard error of the best, take the
+    strongest. Plain argmax proved too unstable here. An inner split of a
+    73-sequence stratum leaves about 17 training components, and the penalty it
+    landed on moved the headline correlation on `kcat_over_km` between 0.30 and
+    0.40. Breaking ties toward more shrinkage is the conventional remedy and
+    errs in the conservative direction, since it can only lower the score.
     """
     unique = len(set(groups))
     if unique < 3:
         return 1.0
 
     splitter = GroupKFold(n_splits=min(5, unique))
-    best, best_score = 1.0, -np.inf
+    folds = list(splitter.split(x, y, groups))
+
+    # Each penalty is scored once per fold rather than on pooled predictions,
+    # because the rule needs the spread across folds to form its error bar.
+    per_alpha: dict[float, list[float]] = {}
     for alpha in ALPHAS:
-        predicted = np.zeros_like(y)
-        for fit, held in splitter.split(x, y, groups):
-            model = Ridge(alpha=alpha).fit(x[fit], y[fit])
-            predicted[held] = model.predict(x[held])
-        score = spearmanr(predicted, y).statistic
-        if np.isfinite(score) and score > best_score:
-            best, best_score = alpha, score
-    return best
+        scores = []
+        for fit, held in folds:
+            if len(set(y[held])) < 3:
+                continue
+            predicted = fit_predict(x[fit], y[fit], x[held], alpha, standardise)
+            score = spearmanr(predicted, y[held]).statistic
+            if np.isfinite(score):
+                scores.append(float(score))
+        if scores:
+            per_alpha[alpha] = scores
+
+    if not per_alpha:
+        return 1.0
+
+    means = {alpha: float(np.mean(scores)) for alpha, scores in per_alpha.items()}
+    best = max(means, key=means.get)
+    spread = per_alpha[best]
+    standard_error = (float(np.std(spread, ddof=1)) / np.sqrt(len(spread))
+                      if len(spread) > 1 else 0.0)
+
+    threshold = means[best] - standard_error
+    return max(alpha for alpha, mean in means.items() if mean >= threshold)
 
 
 def grouped_out_of_fold(x: np.ndarray, y: np.ndarray, groups: list[str],
-                        n_splits: int | None) -> np.ndarray:
+                        n_splits: int | None,
+                        standardise: bool = False,
+                        centre_folds: bool = True) -> np.ndarray:
     """Out-of-fold predictions with whole components held out together.
 
     ``n_splits=None`` means leave one component out, the limiting case: it
     uses the most training data per fold, at the cost of one model fit per
     component.
+
+    ``centre_folds`` z-scores each fold's predictions before they are
+    concatenated, and defaults to on because without it the pooled vector is
+    not a valid thing to correlate. Under a strong penalty every fold's
+    predictions shrink toward that fold's own training mean, so the
+    concatenated vector ranks sequences largely by which fold they landed in.
+    Components here differ enough in mean that the effect is severe: on the
+    p-np-c4 stratum the pooled score for sequence length ran from +0.04 to
+    -0.29 across the penalty grid, while the fold-aware score held at +0.40
+    and matched a direct within-fold calculation of +0.4157.
+
+    Z-scoring keeps the ordering each model produced and discards only the
+    fold-specific level and scale, so one correlation over every sequence is
+    still available and the bootstrap and permutation tests built on it still
+    apply. Leave-one-component-out cannot be corrected this way, because a
+    fold holding one sequence has no within-fold ordering at all, which is
+    reason enough to prefer 5-fold for any reported number.
     """
     unique = sorted(set(groups))
     predicted = np.zeros_like(y)
 
     if n_splits is None:
+        # No fold centring here: a single-sequence fold has nothing to centre.
         for held_out in unique:
             mask = np.array([g == held_out for g in groups])
             if mask.all():
                 continue
             inner = [g for g, keep in zip(groups, ~mask) if keep]
-            alpha = pick_alpha(x[~mask], y[~mask], inner)
-            model = Ridge(alpha=alpha).fit(x[~mask], y[~mask])
-            predicted[mask] = model.predict(x[mask])
+            alpha = pick_alpha(x[~mask], y[~mask], inner, standardise)
+            predicted[mask] = fit_predict(x[~mask], y[~mask], x[mask], alpha,
+                                          standardise)
         return predicted
 
     splitter = GroupKFold(n_splits=min(n_splits, len(unique)))
     for fit, held in splitter.split(x, y, groups):
         inner = [groups[i] for i in fit]
-        alpha = pick_alpha(x[fit], y[fit], inner)
-        model = Ridge(alpha=alpha).fit(x[fit], y[fit])
-        predicted[held] = model.predict(x[held])
+        alpha = pick_alpha(x[fit], y[fit], inner, standardise)
+        fold = fit_predict(x[fit], y[fit], x[held], alpha, standardise)
+        predicted[held] = centre_fold(fold) if centre_folds else fold
     return predicted
+
+
+def centre_fold(fold: np.ndarray) -> np.ndarray:
+    """Z-score one fold's predictions, or flatten them if they are constant."""
+    spread = float(fold.std())
+    if spread < 1e-12:
+        return np.zeros_like(fold)
+    return (fold - fold.mean()) / spread
+
+
+def fold_scores(x: np.ndarray, y: np.ndarray, groups: list[str],
+                n_splits: int = 5, standardise: bool = False) -> list[float]:
+    """One Spearman correlation per fold, unpooled.
+
+    The most conservative reading of a grouped CV: every comparison is between
+    two sequences scored by the same model. It is noisy, since a fold here
+    holds twelve to twenty-four sequences, which is why the fold-centred
+    pooled score is the one reported and this is the check on it.
+    """
+    splitter = GroupKFold(n_splits=min(n_splits, len(set(groups))))
+    scores = []
+
+    for fit, held in splitter.split(x, y, groups):
+        predicted = fit_predict(x[fit], y[fit], x[held],
+                                pick_alpha(x[fit], y[fit],
+                                           [groups[i] for i in fit],
+                                           standardise),
+                                standardise)
+        if len(set(predicted)) < 3 or len(set(y[held])) < 3:
+            continue
+        score = spearmanr(predicted, y[held]).statistic
+        if np.isfinite(score):
+            scores.append(float(score))
+    return scores
 
 
 def bootstrap_ci(y, predicted, groups, n: int = 2000,
