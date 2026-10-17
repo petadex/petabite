@@ -21,7 +21,7 @@
 #SBATCH --mem=64gb
 #SBATCH --time=02:45:00
 #SBATCH --output=logs/%x-%j.out
-set -u -o pipefail
+set -e -u -o pipefail
 export PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=1
 export HF_HOME=/project/6122149/purav/hf_cache
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
@@ -34,15 +34,19 @@ echo "job ${SLURM_JOB_ID} on $(hostname)"
 
 echo
 echo "########## 1. main sweep ##########"
+pids=()
 python scripts/eval_sweep.py --embeddings logs/label_embeddings.npz \
   --standardise --out "${OUT}/sweep.json" > "${OUT}/sweep.log" 2>&1 &
+pids+=($!)
 python scripts/eval_sweep.py --embeddings logs/label_embeddings.npz \
   --standardise --include-llm --out "${OUT}/sweep_llm.json" \
   > "${OUT}/sweep_llm.log" 2>&1 &
+pids+=($!)
 
 echo "########## 2. leakage ##########"
 python scripts/eval_leakage.py --embeddings logs/label_embeddings.npz \
   --standardise --out "${OUT}/leakage.json" > "${OUT}/leakage.log" 2>&1 &
+pids+=($!)
 
 echo "########## 3. strata and conditions ##########"
 for target in kcat kcat_over_km km pet_release_conc relative_activity; do
@@ -51,6 +55,7 @@ for target in kcat kcat_over_km km pet_release_conc relative_activity; do
     --targets "${target}" --standardise --power-trials 100 \
     --out "${OUT}/conditions_${target}.json" \
     > "${OUT}/conditions_${target}.log" 2>&1 &
+  pids+=($!)
 done
 
 echo "########## 4. robustness of whatever wins ##########"
@@ -61,8 +66,12 @@ for pair in "kcat_over_km:p-np-c4" "kcat:p-np-c4" "km:p-np-c4"; do
     --target "${target}" --substrate "${substrate}" --standardise \
     --out "${OUT}/robust_${target}.json" \
     > "${OUT}/robust_${target}.log" 2>&1 &
+  pids+=($!)
 done
-wait
+failed=0
+for pid in "${pids[@]}"; do
+  wait "${pid}" || failed=1
+done
 echo "all finished"
 
 for section in sweep leakage conditions robust; do
