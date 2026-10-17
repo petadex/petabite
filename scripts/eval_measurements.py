@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import random
 from pathlib import Path
 
 import numpy as np
@@ -307,6 +308,169 @@ def evaluate(target: str, include_llm: bool, index: dict[str, int], cached,
     return result
 
 
+
+def predict_with_folds(x: np.ndarray, y: np.ndarray, groups: list[str],
+                       folds, standardise: bool) -> np.ndarray:
+    """Out-of-fold predictions for a fold assignment handed in from outside.
+
+    Separate from `fixed_alpha_prediction` because the stresses need to supply
+    their own folds while keeping the nested penalty selection the headline
+    uses, so that what they stress is the result as reported rather than a
+    simplified version of it.
+    """
+    predicted = np.zeros_like(y)
+    for fit, held in folds:
+        alpha = stats.pick_alpha(x[fit], y[fit], [groups[i] for i in fit],
+                                 standardise)
+        fold = stats.fit_predict(x[fit], y[fit], x[held], alpha, standardise)
+        predicted[held] = stats.centre_fold(fold)
+    return predicted
+
+
+def shuffled_group_folds(groups: list[str], rng, n_splits: int = 5):
+    """Assign components to folds at random rather than by size.
+
+    GroupKFold is deterministic: it sorts components by size and deals them
+    out. That is one assignment out of many, and a result that holds only for
+    it is not a result.
+    """
+    unique = sorted(set(groups))
+    rng.shuffle(unique)
+    assignment = {group: position % n_splits
+                  for position, group in enumerate(unique)}
+    bucket = np.array([assignment[group] for group in groups])
+
+    folds = []
+    for held_out in range(n_splits):
+        held = np.where(bucket == held_out)[0]
+        fit = np.where(bucket != held_out)[0]
+        if len(held) and len(fit):
+            folds.append((fit, held))
+    return folds
+
+
+def score_rows(rows: np.ndarray, x: np.ndarray, y: np.ndarray,
+               groups: list[str], measurements: list[labels.Measurement],
+               components: dict[str, str], standardise: bool,
+               folds=None) -> float | None:
+    """The headline statistic on a subset of rows, optionally with given folds.
+
+    Used by the stresses, which each change either which rows are present or
+    which fold they sit in, and then need the same number recomputed.
+    """
+    sub_groups = [groups[i] for i in rows]
+    sub_measurements = [measurements[i] for i in rows]
+    if len(set(sub_groups)) < 3:
+        return None
+
+    if folds is None:
+        predicted = stats.grouped_out_of_fold(x[rows], y[rows], sub_groups,
+                                              n_splits=5,
+                                              standardise=standardise)
+    else:
+        predicted = predict_with_folds(x[rows], y[rows], sub_groups, folds,
+                                       standardise)
+
+    averaged, medians, _ = collapse_to_sequences(sub_measurements, predicted,
+                                                 components)
+    score = spearmanr(averaged, medians).statistic
+    return round(float(score), 3) if np.isfinite(score) else None
+
+
+def stress(target: str, block: str, include_llm: bool,
+           index: dict[str, int], cached, trials: int, seed: int) -> dict:
+    """Push one feature block of one target until it breaks, or does not.
+
+    The acceptance test asks for four stresses. The alpha profile is already
+    reported beside every score, so the three here are the others: a
+    distribution over fold assignments instead of the one GroupKFold picks,
+    each homology component dropped in turn, and the whole thing repeated
+    without standardising.
+    """
+    measurements = read_rows(target, include_llm, index)
+    components = labels.read_components()
+    groups = [components[m.seq_md5] for m in measurements]
+    y = np.array([m.value for m in measurements])
+    blocks, protocol, _ = build_blocks(measurements, index, cached)
+
+    if block == "none":
+        x = join(None, protocol)
+    else:
+        x = join(blocks[block], None)
+
+    unique = sorted(set(groups))
+    all_rows = np.arange(len(y))
+    result: dict[str, object] = {
+        "target": target, "block": block,
+        "n_measurements": len(y), "n_components": len(unique),
+    }
+
+    print(f"stressing {block} on {target}: {len(y)} measurements, "
+          f"{len(unique)} components")
+    print()
+
+    # 1. Raw against standardised. A ridge penalty is not scale invariant, so
+    #    a result that holds only one way is a statement about the penalty.
+    for standardise in (True, False):
+        label = "standardised" if standardise else "raw"
+        score = score_rows(all_rows, x, y, groups, measurements, components,
+                           standardise)
+        result[f"headline_{label}"] = score
+        print(f"  {label:14} {score}")
+    print()
+
+    # 2. Forty random component-to-fold assignments.
+    rng = random.Random(seed)
+    scores = []
+    for _ in range(trials):
+        folds = shuffled_group_folds(groups, rng)
+        score = score_rows(all_rows, x, y, groups, measurements, components,
+                           True, folds=folds)
+        if score is not None:
+            scores.append(score)
+
+    if scores:
+        result["fold_reshuffle"] = {
+            "trials": len(scores),
+            "mean": round(float(np.mean(scores)), 3),
+            "sd": round(float(np.std(scores)), 3),
+            "min": round(float(np.min(scores)), 3),
+            "max": round(float(np.max(scores)), 3),
+            "share_above_zero": round(
+                float(np.mean([s > 0 for s in scores])), 3),
+        }
+        summary = result["fold_reshuffle"]
+        print(f"  fold reshuffling over {summary['trials']} assignments:")
+        print(f"    mean {summary['mean']:+.3f}  sd {summary['sd']:.3f}  "
+              f"range {summary['min']:+.3f} to {summary['max']:+.3f}  "
+              f"above zero {summary['share_above_zero']:.0%}")
+    print()
+
+    # 3. Each component dropped in turn. With few components this is the
+    #    harshest of the three, which is the point: if one family carries the
+    #    correlation, removing it has to show.
+    dropped = {}
+    for held_out in unique:
+        keep = np.array([i for i, g in enumerate(groups) if g != held_out])
+        dropped[held_out] = score_rows(keep, x, y, groups, measurements,
+                                       components, True)
+    result["drop_one_family"] = dropped
+
+    values = [v for v in dropped.values() if v is not None]
+    print(f"  dropping each of {len(unique)} components in turn:")
+    for name, score in sorted(dropped.items(), key=lambda kv: (kv[1] is None,
+                                                               kv[1])):
+        print(f"    without {name[:16]:16} {score}")
+    if values:
+        result["drop_one_family_summary"] = {
+            "min": round(float(np.min(values)), 3),
+            "max": round(float(np.max(values)), 3),
+            "share_above_zero": round(
+                float(np.mean([v > 0 for v in values])), 3),
+        }
+    print()
+    return result
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--embeddings", type=Path, required=True)
@@ -316,6 +480,12 @@ def main() -> int:
                         help="z-score features per fold, fitted on the "
                              "training rows only")
     parser.add_argument("--include-llm", action="store_true")
+    parser.add_argument("--stress", default="",
+                        help="instead of the sweep, stress this feature "
+                             "block on the chosen targets")
+    parser.add_argument("--stress-trials", type=int, default=40,
+                        help="random component-to-fold assignments to try")
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
@@ -327,6 +497,17 @@ def main() -> int:
     print(f"embeddings: {len(index)} sequences")
     print(f"standardised: {args.standardise}, llm labels: {args.include_llm}")
     print()
+
+    if args.stress:
+        stressed = {target: stress(target, args.stress, args.include_llm,
+                                   index, cached, args.stress_trials,
+                                   args.seed)
+                    for target in chosen}
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(stressed, indent=2))
+            print(f"wrote {args.out}")
+        return 0
 
     results = {}
     for target in chosen:
