@@ -75,7 +75,8 @@ def fit_predict(x_fit, y_fit, x_held, alpha: float,
 
 
 def pick_alpha(x: np.ndarray, y: np.ndarray, groups: list[str],
-               standardise: bool = False) -> float:
+               standardise: bool = False,
+               criterion: str = "spearman") -> float:
     """Choose a ridge penalty by grouped CV inside the fitting data only.
 
     Called from within an outer fold, so the held-out components of that outer
@@ -88,7 +89,25 @@ def pick_alpha(x: np.ndarray, y: np.ndarray, groups: list[str],
     landed on moved the headline correlation on `kcat_over_km` between 0.30 and
     0.40. Breaking ties toward more shrinkage is the conventional remedy and
     errs in the conservative direction, since it can only lower the score.
+
+    `criterion` decides what the penalties are scored by, and the choice is
+    not cosmetic. Under the default Spearman this function returns the top of
+    the grid essentially always, and that is arithmetic rather than a
+    coincidence: shrinkage does not reorder a single-column feature at all,
+    so every penalty ties exactly, the one-standard-error band covers the
+    whole grid and `max` takes 1e6. It is the right answer for a rank
+    question, where the penalty genuinely cannot matter, and it is useless for
+    anything that depends on the scale of a prediction. Job 6359377 found the
+    consequence on a synthetic target with y = 3x + noise: selection by
+    Spearman chose 1e6, the coefficients vanished, the probe returned its
+    intercept, and an R squared that should have been 0.99 read 0.000.
+
+    `criterion="mse"` scores by negative mean squared error instead, which
+    does depend on the penalty, and is what any error metric has to use. Rank
+    results stay on the default so that nothing already reported moves.
     """
+    if criterion not in ("spearman", "mse"):
+        raise ValueError(f"unknown criterion {criterion!r}")
     unique = len(set(groups))
     if unique < 3:
         return 1.0
@@ -105,7 +124,10 @@ def pick_alpha(x: np.ndarray, y: np.ndarray, groups: list[str],
             if len(set(y[held])) < 3:
                 continue
             predicted = fit_predict(x[fit], y[fit], x[held], alpha, standardise)
-            score = spearmanr(predicted, y[held]).statistic
+            if criterion == "spearman":
+                score = spearmanr(predicted, y[held]).statistic
+            else:
+                score = -float(np.mean((y[held] - predicted) ** 2))
             if np.isfinite(score):
                 scores.append(float(score))
         if scores:
