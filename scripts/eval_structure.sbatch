@@ -13,6 +13,11 @@
 # Only the 397 sequences carrying a scoreable target are folded, since one
 # with no usable label cannot contribute to any score.
 #
+# Eleven hours, not eight. Job 6354579 timed the three longest structures at
+# 246s each, and extrapolating over the length distribution by the pair
+# stack's quadratic scaling gives 3.0h to 6.5h for all 397 depending on the
+# exponent. Eight hours left no margin at the slow end of that range.
+#
 # Two virtualenvs are involved and they cannot share a process: esm 3.4.1
 # pins torch 2.11 and lives in ~/esmfold2-341, while the evaluation code lives
 # in ~/petabite. Each step therefore runs in its own subshell, and the
@@ -25,7 +30,7 @@
 #SBATCH --gpus-per-node=l40s:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=96gb
-#SBATCH --time=08:00:00
+#SBATCH --time=11:00:00
 #SBATCH --output=logs/%x-%j.out
 set -e -u -o pipefail
 export PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=1

@@ -191,7 +191,15 @@ def summarise(result) -> tuple[dict[str, float], np.ndarray | None]:
 
     embedding = result.output_embedding_pair_pooled
     if embedding is not None:
-        embedding = embedding.float().cpu().numpy().ravel().astype(np.float32)
+        # "Pooled" here means pooled over the pair axis, not to a fixed-size
+        # vector: what comes back still has a token axis, so its raveled
+        # length varies with the sequence and job 6354579 died trying to stack
+        # 397 different widths. Averaging over every axis but the last gives
+        # one vector per sequence, of the model's embedding width.
+        array = embedding.float().cpu().numpy()
+        if array.ndim > 1:
+            array = array.reshape(-1, array.shape[-1]).mean(axis=0)
+        embedding = array.astype(np.float32)
     return features, embedding
 
 
@@ -261,6 +269,11 @@ def main() -> int:
         scalars.append([features[key] for key in columns])
         embeddings.append(embedding if embedding is not None
                           else np.zeros(1, dtype=np.float32))
+        if embeddings[-1].shape != embeddings[0].shape:
+            raise SystemExit(
+                f"{name} gave a {embeddings[-1].shape} embedding against "
+                f"{embeddings[0].shape} for the first sequence; the widths "
+                f"have to match to be stacked")
 
         if position == 1 or position % 5 == 0 or position == len(names):
             elapsed = time.time() - started
