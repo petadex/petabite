@@ -28,6 +28,7 @@ import numpy as np
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import GroupKFold
 
+from petabite.eval_module import stats
 from petabite.eval_module.labels import Measurement
 
 # Conditions are missing for a sizeable minority of rows, between 8% of pH
@@ -116,8 +117,12 @@ def predict_from_conditions(measurements: list[Measurement],
     predicted = np.zeros_like(y)
     splitter = GroupKFold(n_splits=min(n_splits, unique))
     for fit, held in splitter.split(x, y, groups):
-        model = Ridge(alpha=alpha).fit(x[fit], y[fit])
-        predicted[held] = model.predict(x[held])
+        fold = Ridge(alpha=alpha).fit(x[fit], y[fit]).predict(x[held])
+        # Centred within the fold for the same reason the model scoring is:
+        # pooling raw predictions makes the correlation partly a ranking of
+        # fold means rather than of measurements. See
+        # `stats.grouped_out_of_fold`.
+        predicted[held] = stats.centre_fold(fold)
     return predicted
 
 
@@ -126,13 +131,16 @@ def fit_conditions(measurements: list[Measurement],
     """In-sample prediction of each measurement from its protocol.
 
     Deliberately in-sample, which needs justifying because nothing else in
-    this evaluation is. The out-of-fold version above turns out to be
-    *anti*-correlated with the target, around -0.25 on three of the four
-    kinetics columns: substrate and homology family are so confounded in this
-    release that a substrate effect estimated on one set of families has the
-    wrong sign on another. Subtracting such a prediction would inject noise
-    rather than remove protocol variance, which is the opposite of what
-    residualising is for.
+    this evaluation is. Subtracting an out-of-fold condition prediction turned
+    out to increase the spread of the target rather than reduce it, taking
+    `kcat` from a standard deviation of 1.478 to 1.707, so it was injecting
+    noise rather than removing protocol variance.
+
+    The explanation first offered for that was a sign flip from substrate and
+    homology family being confounded, which is plausible but was measured with
+    the pooled scoring since found to be invalid. The in-sample choice does not
+    depend on that explanation: it removes about 42% of `kcat`'s variance,
+    which is what it is for.
 
     An in-sample fit instead errs in the safe direction. It can only remove
     variance, and some of what it removes will be genuine sequence signal that

@@ -173,7 +173,8 @@ def substrate_table(measurements: list[labels.Measurement],
 
 def score_feature_sets(y: np.ndarray, groups: list[str], rows: np.ndarray,
                        features: dict[str, np.ndarray],
-                       power_trials: int = 0) -> dict:
+                       power_trials: int = 0,
+                       standardise: bool = False) -> dict:
     """Grouped 5-fold score for each feature set, plus the verdict.
 
     Leave-one-component-out is skipped here. The main sweep ran both and they
@@ -184,7 +185,8 @@ def score_feature_sets(y: np.ndarray, groups: list[str], rows: np.ndarray,
 
     for name in FEATURE_SETS:
         x = features[name][rows]
-        predicted = stats.grouped_out_of_fold(x, y, groups, n_splits=5)
+        predicted = stats.grouped_out_of_fold(x, y, groups, n_splits=5,
+                                              standardise=standardise)
         rho = spearmanr(predicted, y).statistic
         low, high = stats.bootstrap_ci(y, predicted, groups)
         result["features"][name] = {
@@ -247,7 +249,7 @@ def align_to_embeddings(values: dict[str, float], index: dict[str, int],
 
 def stratified(measurements: list[labels.Measurement], components: dict[str, str],
                index: dict[str, int], features: dict[str, np.ndarray],
-               power_trials: int) -> dict:
+               power_trials: int, standardise: bool) -> dict:
     """Score each substrate stratum that survives the count floors.
 
     Holding the substrate fixed is the cleanest available version of the
@@ -272,7 +274,8 @@ def stratified(measurements: list[labels.Measurement], components: dict[str, str
 
         print(f"  substrate {substrate or '(blank)'}: {len(y)} sequences, "
               f"{n_components} components")
-        result = score_feature_sets(y, groups, rows, features, power_trials)
+        result = score_feature_sets(y, groups, rows, features, power_trials,
+                                    standardise)
         result["n_sequences"] = len(y)
         result["n_components"] = n_components
         result["target_sd"] = round(float(y.std()), 3)
@@ -290,7 +293,7 @@ def stratified(measurements: list[labels.Measurement], components: dict[str, str
 
 def residualised(measurements: list[labels.Measurement], components: dict[str, str],
                  index: dict[str, int], features: dict[str, np.ndarray],
-                 power_trials: int) -> dict:
+                 power_trials: int, standardise: bool) -> dict:
     """Sweep the target again after subtracting the protocol prediction.
 
     Residualising keeps every sequence, unlike stratifying, which is the
@@ -314,7 +317,8 @@ def residualised(measurements: list[labels.Measurement], components: dict[str, s
         print("  too few to score")
         return {"skipped": True, "n_sequences": len(y), "n_components": n_components}
 
-    result = score_feature_sets(y, groups, rows, features, power_trials)
+    result = score_feature_sets(y, groups, rows, features, power_trials,
+                                standardise)
     result["n_sequences"] = len(y)
     result["n_components"] = n_components
     result["residual_sd"] = round(float(y.std()), 3)
@@ -326,7 +330,7 @@ def residualised(measurements: list[labels.Measurement], components: dict[str, s
 
 def examine(target: str, include_llm: bool, components: dict[str, str],
             index: dict[str, int], features: dict[str, np.ndarray],
-            power_trials: int) -> dict:
+            power_trials: int, standardise: bool) -> dict:
     """Run all four tests on one target."""
     measurements = labels.read_measurements(target, include_llm=include_llm)
     print("=" * 78)
@@ -363,11 +367,12 @@ def examine(target: str, include_llm: bool, components: dict[str, str],
               f"sd {row['sd']:5.2f}  {row['substrate'][:40]}")
 
     print("\n-- 3. one substrate at a time --")
-    strata = stratified(measurements, components, index, features, power_trials)
+    strata = stratified(measurements, components, index, features,
+                        power_trials, standardise)
 
     print("\n-- 4. protocol regressed out --")
     residual = residualised(measurements, components, index, features,
-                            power_trials)
+                            power_trials, standardise)
     print()
 
     return {
@@ -413,6 +418,10 @@ def main() -> int:
     parser.add_argument("--include-llm", action="store_true",
                         help="also use the LLM-extracted labels")
     parser.add_argument("--targets", nargs="*", default=list(EXAMINED))
+    parser.add_argument("--standardise", action="store_true",
+                        help="z-score features per fold, so one alpha grid "
+                             "means the same thing for a length column and a "
+                             "960-dimensional embedding")
     parser.add_argument("--power-trials", type=int, default=100,
                         help="simulation draws per effect size; 0 skips the "
                              "power analysis, which is the slowest part")
@@ -425,11 +434,12 @@ def main() -> int:
     components = labels.read_components()
 
     print(f"embeddings: {len(names)} sequences")
-    print(f"llm labels included: {args.include_llm}\n")
+    print(f"llm labels included: {args.include_llm}")
+    print(f"standardised: {args.standardise}\n")
 
     results = {
         target: examine(target, args.include_llm, components, index, features,
-                        args.power_trials)
+                        args.power_trials, args.standardise)
         for target in args.targets
     }
     summarise(results)

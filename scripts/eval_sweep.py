@@ -52,19 +52,30 @@ CONTROLS = ("length", "composition")
 MODELS = ("stock", "plasticesm")
 
 
-def score_one(x: np.ndarray, y: np.ndarray, groups: list[str]) -> dict:
-    """Both CV protocols for a single feature set."""
+def score_one(x: np.ndarray, y: np.ndarray, groups: list[str],
+              standardise: bool) -> dict:
+    """The reported protocol for a single feature set, plus its fold check.
+
+    Only grouped 5-fold is reported now. Leave-one-component-out is dropped:
+    its folds are often a single sequence, which has no within-fold ordering,
+    so it cannot be scored without the fold-offset artefact described on
+    `stats.grouped_out_of_fold`.
+    """
     entry: dict[str, object] = {"dim": int(x.shape[1])}
 
-    for protocol, n_splits in (("kfold5", 5), ("loco", None)):
-        predicted = stats.grouped_out_of_fold(x, y, groups, n_splits)
-        rho = spearmanr(predicted, y).statistic
-        low, high = stats.bootstrap_ci(y, predicted, groups)
-        entry[protocol] = {
-            "spearman": round(float(rho), 3) if np.isfinite(rho) else None,
-            "ci95": [low, high],
-            "permutation_p": stats.permutation_p(y, predicted, groups),
-        }
+    predicted = stats.grouped_out_of_fold(x, y, groups, n_splits=5,
+                                          standardise=standardise)
+    rho = spearmanr(predicted, y).statistic
+    low, high = stats.bootstrap_ci(y, predicted, groups)
+    folds = stats.fold_scores(x, y, groups, 5, standardise)
+
+    entry["kfold5"] = {
+        "spearman": round(float(rho), 3) if np.isfinite(rho) else None,
+        "ci95": [low, high],
+        "permutation_p": stats.permutation_p(y, predicted, groups),
+        "per_fold_mean": round(float(np.mean(folds)), 3) if folds else None,
+        "n_folds": len(folds),
+    }
     return entry
 
 
@@ -85,6 +96,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--embeddings", type=Path, required=True)
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument("--standardise", action="store_true",
+                        help="z-score features per fold, so one alpha grid "
+                             "means the same thing for a length column and a "
+                             "960-dimensional embedding")
     parser.add_argument("--include-llm", action="store_true",
                         help="also aggregate LLM-extracted labels")
     args = parser.parse_args()
@@ -121,12 +136,14 @@ def main() -> int:
                   "target_sd": round(float(y.std()), 3), "features": {}}
 
         for feature_name in FEATURE_SETS:
-            entry = score_one(features[feature_name][rows], y, groups)
+            entry = score_one(features[feature_name][rows], y, groups,
+                              args.standardise)
             result["features"][feature_name] = entry
             kfold = entry["kfold5"]
             print(f"  {feature_name:12} dim {entry['dim']:>4}  "
-                  f"kfold5 rho {str(kfold['spearman']):>7}  CI {kfold['ci95']}  "
-                  f"p {kfold['permutation_p']}")
+                  f"rho {str(kfold['spearman']):>7}  CI {kfold['ci95']}  "
+                  f"p {kfold['permutation_p']}  "
+                  f"per-fold {str(kfold['per_fold_mean']):>7}")
 
         results[target] = result
         print()
