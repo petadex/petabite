@@ -110,4 +110,4 @@ python scripts/eval_head.py \
   --embeddings logs/label_embeddings.npz \
   --targets kcat,kcat_over_km --seeds 3 \
   --out "${OUT}/head.json" 2>&1 \
-  | grep -vE "Warning|score = spearmanr|ConvergenceWarning" || true
+  | grep -vE "Warning|score = spearmanr|warnings.warn" || true
