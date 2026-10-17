@@ -34,7 +34,12 @@ export WANDB_DIR=${SLURM_SUBMIT_DIR}/wandb
 cd "${SLURM_SUBMIT_DIR}"
 source activate_petabite.sh >/dev/null 2>&1
 
+# Colon-separated, NOT comma: sbatch --export uses commas to separate variables,
+# so CORPUS="a,b" silently arrives as CORPUS="a" and the second path vanishes.
+# That cost job 6334352, which trained one corpus while reporting success.
 CORPUS=${CORPUS:-/project/6122149/purav/petabite-tokenized/c60-seed0}
+CORPUS_LIST=${CORPUS//:/,}
+N_CORPORA=$(echo "${CORPUS_LIST}" | awk -F, '{print NF}')
 RUNNAME=${RUNNAME:-plasticesm-c60-r32}
 # The job id goes in the path by default. Two runs sharing an output directory
 # is not hypothetical: on 2026-10-16 jobs 6318367 and 6318656 both wrote
@@ -53,16 +58,20 @@ if [ -n "${OTHERS// /}" ] && [ "${ALLOW_CONCURRENT:-0}" != "1" ]; then
   exit 2
 fi
 
+for c in ${CORPUS//:/ }; do
+  if [ ! -d "$c" ]; then echo "MISSING CORPUS: $c"; exit 3; fi
+done
+
 echo "=================== environment ==================="
 echo "host    : $(hostname)"
 echo "job     : ${SLURM_JOB_ID} on ${SLURM_JOB_PARTITION}"
-echo "corpus  : ${CORPUS}"
+echo "corpus  : ${N_CORPORA} corpus/corpora -> ${CORPUS_LIST}"
 echo "outdir  : ${OUTDIR}"
 echo "resume  : ${RESUME}"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 python -c "import torch, esm, transformers; print('torch', torch.__version__, '| esm', esm.__version__, '| transformers', transformers.__version__)"
 # CORPUS may be a comma-separated list of corpora, so report each manifest.
-for c in ${CORPUS//,/ }; do
+for c in ${CORPUS//:/ }; do
   echo "--- ${c} ---"
   test -f "${c}/manifest.json" && cat "${c}/manifest.json" || echo "  no manifest"
 done
@@ -70,7 +79,7 @@ done
 echo "=================== train ==================="
 python -m petabite.mlm_finetune \
   output_dir="${OUTDIR}" \
-  data.tokenized_path="[${CORPUS}]" \
+  data.tokenized_path="[${CORPUS_LIST}]" \
   trainer.resume_from_checkpoint="${RESUME}" \
   wandb.run_name="${RUNNAME}-${SLURM_JOB_ID}"
 TRAIN_RC=$?
