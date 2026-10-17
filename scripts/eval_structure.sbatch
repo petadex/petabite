@@ -37,10 +37,14 @@ export PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=1
 cd "${SLURM_SUBMIT_DIR}"
 
 OUT="logs/structure-${SLURM_JOB_ID}"
-FASTA="${OUT}/to_fold.fasta"
+# Not under the job id: job 6355499 was requeued onto another node and began
+# again from nothing, and the folding script now resumes from whatever is
+# already on disk. That only helps if the path is the same next time.
+SHARED=logs/structures
+FASTA="${SHARED}/to_fold.fasta"
 GATE="${OUT}/gate.npz"
-STRUCTURES="${OUT}/structures.npz"
-mkdir -p "${OUT}"
+STRUCTURES="${SHARED}/structures.npz"
+mkdir -p "${OUT}" "${SHARED}"
 echo "job ${SLURM_JOB_ID} on $(hostname)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
@@ -162,10 +166,12 @@ PY
 
 echo
 echo "########## 3. fold everything ##########"
+echo "stderr goes to ${OUT}/fold.stderr; rdkit logs one warning per CCD entry"
 (
   source /project/6122149/purav/igem-toronto/activate_esmfold2.sh
   export HF_HUB_OFFLINE=1 PYTHONNOUSERSITE=1
-  python scripts/fold_labels.py --sequences "${FASTA}" --out "${STRUCTURES}"
+  python scripts/fold_labels.py --sequences "${FASTA}" --out "${STRUCTURES}" \
+    2> "${OUT}/fold.stderr"
 )
 
 echo
