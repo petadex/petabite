@@ -67,7 +67,8 @@ def load_backbone(lora_dir: Path | None):
 
 @torch.no_grad()
 def pseudo_log_likelihood(model, tokenizer, sequence: str, mask_id: int,
-                          stride: int, max_length: int) -> float:
+                          stride: int, max_length: int,
+                          mask_batch: int = MASK_BATCH) -> float:
     """Mean log probability of each residue when that residue is masked.
 
     The special tokens at either end are left alone: only positions holding
@@ -92,8 +93,8 @@ def pseudo_log_likelihood(model, tokenizer, sequence: str, mask_id: int,
             continue
 
         # One masked copy per chosen position, processed in bounded batches.
-        for start in range(0, len(chosen), MASK_BATCH):
-            block = chosen[start : start + MASK_BATCH]
+        for start in range(0, len(chosen), mask_batch):
+            block = chosen[start : start + mask_batch]
             batch = input_ids.unsqueeze(0).repeat(len(block), 1)
             for row, position in enumerate(block):
                 batch[row, position] = mask_id
@@ -105,11 +106,14 @@ def pseudo_log_likelihood(model, tokenizer, sequence: str, mask_id: int,
                     compute_sae=False,
                 ).logits
 
+            # Gather the log probability of the true residue at each masked
+            # position in one vectorised step, rather than looping on the GPU.
+            rows = torch.arange(len(block), device=logits.device)
+            columns = torch.tensor(block, device=logits.device)
+            wanted = input_ids[columns]
             log_probs = torch.log_softmax(logits.float(), dim=-1)
-            for row, position in enumerate(block):
-                true_token = int(input_ids[position])
-                total += float(log_probs[row, position, true_token])
-                counted += 1
+            total += float(log_probs[rows, columns, wanted].sum())
+            counted += len(block)
 
     return total / counted if counted else float("nan")
 
@@ -121,15 +125,26 @@ def main() -> int:
     parser.add_argument("--stride", type=int, default=1,
                         help="mask every nth position in n passes; 1 is exact")
     parser.add_argument("--max-length", type=int, default=1024)
+    parser.add_argument("--mask-batch", type=int, default=MASK_BATCH,
+                        help="masked copies scored in one forward pass")
     parser.add_argument("--limit", type=int, default=0,
                         help="score only the first n sequences, for a smoke test")
     args = parser.parse_args()
 
     sequences = labels.read_sequences()
-    names = sorted(sequences)
+    # Longest first: every masked copy of a sequence is padded to that
+    # sequence's own length, so grouping by length keeps the padding down and
+    # surfaces any memory problem in the first batch rather than an hour in.
+    names = sorted(sequences, key=lambda name: -len(sequences[name]))
     if args.limit:
         names = names[: args.limit]
-    print(f"{len(names)} sequences, stride {args.stride}")
+    lengths = [len(sequences[name]) for name in names]
+    print(f"{len(names)} sequences, stride {args.stride}, "
+          f"batch {args.mask_batch}")
+    print(f"lengths: min {min(lengths)}, median "
+          f"{int(np.median(lengths))}, max {max(lengths)}")
+    print(f"forward passes needed: about "
+          f"{sum(lengths) // max(args.stride, 1):,} per backbone")
 
     tokenizer = load_esmc_tokenizer(MODEL_ID, args.max_length)
     mask_id = tokenizer.mask_token_id
@@ -137,7 +152,9 @@ def main() -> int:
         raise SystemExit("tokenizer has no mask token; cannot score likelihood")
     print(f"mask token id {mask_id}")
 
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, np.ndarray] = {"names": np.array(names)}
+
     for backbone, lora_dir in (("stock", None), ("plasticesm", args.lora)):
         print(f"scoring with {backbone}")
         model = load_backbone(lora_dir)
@@ -145,18 +162,25 @@ def main() -> int:
         for position, name in enumerate(names, start=1):
             scores.append(pseudo_log_likelihood(
                 model, tokenizer, sequences[name], mask_id,
-                args.stride, args.max_length))
+                args.stride, args.max_length, args.mask_batch))
             if position % 100 == 0:
-                print(f"  {position}/{len(names)}")
+                print(f"  {position}/{len(names)}  "
+                      f"running mean {np.nanmean(scores):.4f}")
+
         payload[f"pll_{backbone}"] = np.array(scores, dtype=np.float32)
         finite = np.isfinite(payload[f"pll_{backbone}"])
         print(f"  {finite.sum()} finite, mean "
               f"{payload[f'pll_{backbone}'][finite].mean():.4f}")
+
+        # Written after each backbone rather than at the end. Job 6346834 was
+        # heading for a timeout partway through the second backbone, which
+        # would have discarded the first one too.
+        np.savez_compressed(args.out, **payload)
+        print(f"  wrote {args.out} ({sorted(payload)})")
+
         del model
         torch.cuda.empty_cache()
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(args.out, **payload)
     print(f"wrote {args.out}")
     return 0
 
