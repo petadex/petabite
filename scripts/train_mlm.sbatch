@@ -37,8 +37,23 @@ cd "${SLURM_SUBMIT_DIR}"
 source activate_petabite.sh >/dev/null 2>&1
 
 CORPUS=${CORPUS:-/project/6122149/purav/petabite-tokenized/c60-seed0}
-OUTDIR=${OUTDIR:-outputs/plasticesm-c60-r32}
+RUNNAME=${RUNNAME:-plasticesm-c60-r32}
+# The job id goes in the path by default. Two runs sharing an output directory
+# is not hypothetical: on 2026-10-16 jobs 6318367 and 6318656 both wrote
+# outputs/plasticesm-c60-r32 for five hours, leaving intermediate checkpoints
+# that belonged to whichever job happened to get there last.
+OUTDIR=${OUTDIR:-outputs/${RUNNAME}-${SLURM_JOB_ID}}
 RESUME=${RESUME:-null}
+
+# Refuse to start alongside another training job, which catches the same
+# mistake at submission instead of after five hours of duplicated GPU.
+OTHERS=$(squeue -u "$USER" -h -o "%i %j" 2>/dev/null \
+         | awk -v me="${SLURM_JOB_ID}" '$1 != me && $2 ~ /^plasticesm/ {print $1}' | tr '\n' ' ')
+if [ -n "${OTHERS// /}" ] && [ "${ALLOW_CONCURRENT:-0}" != "1" ]; then
+  echo "REFUSING TO START: another plasticesm job is queued or running: ${OTHERS}"
+  echo "If deliberate, resubmit with --export=ALL,ALLOW_CONCURRENT=1 and a distinct OUTDIR."
+  exit 2
+fi
 
 echo "=================== environment ==================="
 echo "host    : $(hostname)"
@@ -48,14 +63,18 @@ echo "outdir  : ${OUTDIR}"
 echo "resume  : ${RESUME}"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 python -c "import torch, esm, transformers; print('torch', torch.__version__, '| esm', esm.__version__, '| transformers', transformers.__version__)"
-test -f "${CORPUS}/manifest.json" && cat "${CORPUS}/manifest.json"
+# CORPUS may be a comma-separated list of corpora, so report each manifest.
+for c in ${CORPUS//,/ }; do
+  echo "--- ${c} ---"
+  test -f "${c}/manifest.json" && cat "${c}/manifest.json" || echo "  no manifest"
+done
 
 echo "=================== train ==================="
 python -m petabite.mlm_finetune \
   output_dir="${OUTDIR}" \
-  data.tokenized_path="${CORPUS}" \
+  data.tokenized_path="[${CORPUS}]" \
   trainer.resume_from_checkpoint="${RESUME}" \
-  wandb.run_name="plasticesm-c60-r32-${SLURM_JOB_ID}"
+  wandb.run_name="${RUNNAME}-${SLURM_JOB_ID}"
 TRAIN_RC=$?
 echo "training exit code: ${TRAIN_RC}"
 if [ "${TRAIN_RC}" -ne 0 ]; then
