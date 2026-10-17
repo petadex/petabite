@@ -132,6 +132,7 @@ def protocol_share(measurements: list[labels.Measurement],
 
     rho = spearmanr(predicted, y).statistic
     low, high = stats.bootstrap_ci(y, predicted, groups)
+    jack_low, jack_high = stats.jackknife_ci(y, predicted, groups)
     _, names = conditions.design_matrix(measurements)
 
     return {
@@ -139,6 +140,7 @@ def protocol_share(measurements: list[labels.Measurement],
         "n_features": len(names),
         "spearman": round(float(rho), 3) if np.isfinite(rho) else None,
         "ci95": [low, high],
+        "jackknife95": [jack_low, jack_high],
         "permutation_p": stats.permutation_p(y, predicted, groups),
     }
 
@@ -189,10 +191,12 @@ def score_feature_sets(y: np.ndarray, groups: list[str], rows: np.ndarray,
                                               standardise=standardise)
         rho = spearmanr(predicted, y).statistic
         low, high = stats.bootstrap_ci(y, predicted, groups)
+        jack = stats.jackknife_ci(y, predicted, groups)
         result["features"][name] = {
             "dim": int(x.shape[1]),
             "spearman": round(float(rho), 3) if np.isfinite(rho) else None,
             "ci95": [low, high],
+            "jackknife95": list(jack),
             "permutation_p": stats.permutation_p(y, predicted, groups),
         }
 

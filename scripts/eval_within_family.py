@@ -175,12 +175,18 @@ def score(x: np.ndarray, y: np.ndarray, groups: list[str],
                                           standardise=True)
     rho = spearmanr(predicted, y).statistic
     low, high = stats.bootstrap_ci(y, predicted, groups)
+    # Both intervals. The bootstrap excludes zero in 5% to 22% of null draws
+    # against a nominal 5%, measured by job 6352882. The CI columns in the
+    # item 1 and item 2 tables of the notebook are the bootstrap ones, which
+    # is why they are flagged there.
+    jack_low, jack_high = stats.jackknife_ci(y, predicted, groups)
     folds = stats.fold_scores(x, y, groups, 5, standardise=True)
 
     entry = {
         "dim": int(x.shape[1]),
         "spearman": round(float(rho), 3) if np.isfinite(rho) else None,
         "ci95": [low, high],
+        "jackknife95": [jack_low, jack_high],
         "permutation_p": stats.permutation_p(y, predicted, groups),
         "per_fold_mean": round(float(np.mean(folds)), 3) if folds else None,
         "n_folds": len(folds),
@@ -205,11 +211,13 @@ def score_cross_family(x_train, y_train, train_groups, x_test, y_test,
 
     rho = spearmanr(predicted, y_test).statistic
     low, high = stats.bootstrap_ci(y_test, predicted, test_groups)
+    jack = stats.jackknife_ci(y_test, predicted, test_groups)
     return {
         "dim": int(x_train.shape[1]),
         "alpha": alpha,
         "spearman": round(float(rho), 3) if np.isfinite(rho) else None,
         "ci95": [low, high],
+        "jackknife95": list(jack),
         "permutation_p": stats.permutation_p(y_test, predicted, test_groups),
     }
 
@@ -267,9 +275,11 @@ def unfitted_table(features: dict[str, np.ndarray], y: np.ndarray,
         rho = spearmanr(column[usable], y[usable]).statistic
         kept = [g for g, keep in zip(groups, usable) if keep]
         low, high = stats.bootstrap_ci(y[usable], column[usable], kept)
+        jack = stats.jackknife_ci(y[usable], column[usable], kept)
         out[name] = {
             "spearman": round(float(rho), 3) if np.isfinite(rho) else None,
             "ci95": [low, high],
+            "jackknife95": list(jack),
             "permutation_p": stats.permutation_p(y[usable], column[usable],
                                                  kept),
             "n": int(usable.sum()),

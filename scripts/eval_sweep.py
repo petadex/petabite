@@ -67,11 +67,17 @@ def score_one(x: np.ndarray, y: np.ndarray, groups: list[str],
                                           standardise=standardise)
     rho = spearmanr(predicted, y).statistic
     low, high = stats.bootstrap_ci(y, predicted, groups)
+    # Both intervals. The bootstrap excludes zero in 5% to 22% of null draws
+    # against a nominal 5%, measured by job 6352882, because it resamples
+    # components with replacement and duplicates their rows. See
+    # `stats.jackknife_ci`, which is the one to read.
+    jack_low, jack_high = stats.jackknife_ci(y, predicted, groups)
     folds = stats.fold_scores(x, y, groups, 5, standardise)
 
     entry["kfold5"] = {
         "spearman": round(float(rho), 3) if np.isfinite(rho) else None,
         "ci95": [low, high],
+        "jackknife95": [jack_low, jack_high],
         "permutation_p": stats.permutation_p(y, predicted, groups),
         "per_fold_mean": round(float(np.mean(folds)), 3) if folds else None,
         "n_folds": len(folds),
