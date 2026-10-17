@@ -10,7 +10,7 @@
 #SBATCH --mem=64gb
 #SBATCH --time=00:40:00
 #SBATCH --output=logs/%x-%j.out
-set -u -o pipefail
+set -e -u -o pipefail
 export PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=1
 export HF_HOME=/project/6122149/purav/hf_cache
 cd "${SLURM_SUBMIT_DIR}"

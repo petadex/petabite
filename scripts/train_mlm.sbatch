@@ -26,7 +26,7 @@
 #SBATCH --mem=64gb
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/%x-%j.out
-set -u -o pipefail
+set -e -u -o pipefail
 
 export PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
 export HF_HUB_OFFLINE=1

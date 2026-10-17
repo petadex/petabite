@@ -19,7 +19,7 @@
 #SBATCH --mem=64gb
 #SBATCH --time=02:45:00
 #SBATCH --output=logs/%x-%j.out
-set -u -o pipefail
+set -e -u -o pipefail
 export PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=1
 export HF_HOME=/project/6122149/purav/hf_cache
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
@@ -98,15 +98,21 @@ PY
 
 echo
 echo "########## 1. within-family and cross-family ranking ##########"
+pids=()
 for target in pet_release_conc kcat_over_km kcat relative_activity km melting_temperature; do
   python scripts/eval_within_family.py \
     --embeddings logs/label_embeddings.npz \
     --target "${target}" --power-trials 100 \
     --out "${OUT}/${target}.json" > "${OUT}/${target}.log" 2>&1 &
+  pids+=($!)
 done
-wait
+failed=0
+for pid in "${pids[@]}"; do
+  wait "${pid}" || failed=1
+done
 for f in "${OUT}"/*.log; do
   echo "##################### $(basename "${f}") #####################"
   cat "${f}"
   echo
 done
+exit "${failed}"

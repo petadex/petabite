@@ -12,7 +12,7 @@
 #SBATCH --mem=32gb
 #SBATCH --time=01:00:00
 #SBATCH --output=logs/%x-%j.out
-set -u -o pipefail
+set -e -u -o pipefail
 export PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=1
 export HF_HOME=/project/6122149/purav/hf_cache
 export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2

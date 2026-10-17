@@ -21,7 +21,7 @@
 #SBATCH --mem=64gb
 #SBATCH --time=00:40:00
 #SBATCH --output=logs/%x-%j.out
-set -u -o pipefail
+set -e -u -o pipefail
 
 export PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
 export PYTHONNOUSERSITE=1
@@ -90,7 +90,7 @@ echo "=================== wandb ==================="
 # Online runs print their URL above and need nothing further. Offline runs land
 # here and have to be uploaded from a login node.
 if ls -d "${WANDB_DIR}"/offline-run-* >/dev/null 2>&1; then
-  ls -d "${WANDB_DIR}"/offline-run-* | tail -3
+  ls -d "${WANDB_DIR}"/offline-run-* | tail -3 || true
   echo "offline run found, upload with:  wandb sync ${WANDB_DIR}/offline-run-*"
 else
   echo "run streamed online; see the W&B URL above"

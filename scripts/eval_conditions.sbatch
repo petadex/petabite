@@ -18,7 +18,7 @@
 #SBATCH --mem=64gb
 #SBATCH --time=02:45:00
 #SBATCH --output=logs/%x-%j.out
-set -u -o pipefail
+set -e -u -o pipefail
 export PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=1
 export HF_HOME=/project/6122149/purav/hf_cache
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
@@ -36,12 +36,14 @@ echo
 # Human-curated labels, and the same again with the LLM-extracted labels
 # folded in, since those changed the family structure of kcat in the first
 # sweep and may change it here too.
+pids=()
 for target in ${TARGETS}; do
   python scripts/eval_conditions.py \
     --embeddings logs/label_embeddings.npz \
     --targets "${target}" \
     --power-trials 100 \
     --out "${OUT}/${target}.json" > "${OUT}/${target}.log" 2>&1 &
+  pids+=($!)
 
   python scripts/eval_conditions.py \
     --embeddings logs/label_embeddings.npz \
@@ -49,9 +51,13 @@ for target in ${TARGETS}; do
     --include-llm \
     --power-trials 100 \
     --out "${OUT}/${target}_llm.json" > "${OUT}/${target}_llm.log" 2>&1 &
+  pids+=($!)
 done
 
-wait
+failed=0
+for pid in "${pids[@]}"; do
+  wait "${pid}" || failed=1
+done
 echo "all processes finished"
 echo
 
@@ -60,3 +66,4 @@ for f in "${OUT}"/*.log; do
   cat "${f}"
   echo
 done
+exit "${failed}"
