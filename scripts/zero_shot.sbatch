@@ -84,12 +84,18 @@ for name in names[:5]:
 #    size and scoring at another leaves the path that produces the numbers
 #    unchecked, which is what happened in job 6348599.
 #
-#    Agreement is to a few thousandths rather than exact. Batching changes the
-#    order the matrix multiplications reduce in, and the forward pass runs
-#    under bf16 autocast, so a mean log probability moves slightly. What must
-#    not move is the ordering of one sequence against another, since every
-#    number downstream is a rank correlation, so that is checked separately
-#    across several probes.
+#    Agreement is approximate rather than exact. Batching changes the order
+#    the matrix multiplications reduce in, and the forward pass runs under
+#    bf16 autocast, so a mean log probability moves slightly. Job 6352095
+#    measured that movement over 40 length-stratified sequences: at most
+#    0.0054, mean +0.0004 so unbiased, 0.28% of the spread of the scores, and
+#    uncorrelated with length at +0.10. The tolerance below is set from that
+#    measurement with headroom, rather than guessed.
+#
+#    What must not move is the ordering of one sequence against another, since
+#    every number downstream is a rank correlation. That is the binding check,
+#    and the same job put the rank correlation between the two batch sizes at
+#    0.9989 over the full length range.
 probes = [sequences[name][:60] for name in names[:4]]
 one_at_a_time, in_batches = [], []
 for short in probes:
@@ -100,7 +106,7 @@ for short in probes:
                                             mask_batch=PRODUCTION_BATCH))
 worst = max(abs(a - b) for a, b in zip(one_at_a_time, in_batches))
 check(f"batch {PRODUCTION_BATCH} agrees with one-at-a-time",
-      worst < 5e-3, f"  worst gap {worst:.6f}")
+      worst < 2e-2, f"  worst gap {worst:.6f}")
 check(f"batch {PRODUCTION_BATCH} preserves the ordering",
       list(np.argsort(one_at_a_time)) == list(np.argsort(in_batches)),
       f"  {list(np.argsort(one_at_a_time))} vs {list(np.argsort(in_batches))}")
