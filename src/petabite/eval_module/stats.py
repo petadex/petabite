@@ -19,7 +19,7 @@ import collections
 import math
 
 import numpy as np
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, t
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import GroupKFold
 
@@ -237,6 +237,71 @@ def bootstrap_ci(y, predicted, groups, n: int = 2000,
         return None, None
     return (round(float(np.percentile(scores, 2.5)), 3),
             round(float(np.percentile(scores, 97.5)), 3))
+
+
+def jackknife_ci(y, predicted, groups,
+                 confidence: float = 0.95) -> tuple[float | None, float | None]:
+    """A 95% interval from deleting one component at a time.
+
+    Preferred over `bootstrap_ci` wherever the component count is low, which
+    here is everywhere. The bootstrap resamples components with replacement,
+    so a component drawn twice contributes its rows twice, which creates exact
+    duplicate pairs and pushes a rank correlation away from zero. Job 6352882
+    measured the consequence under a permuted null, running the real scoring
+    path: the bootstrap interval excluded zero in 18% to 22% of null draws on
+    an eight-component target and 10% to 12% on a forty-component one, against
+    a nominal 5%. So "the interval excludes zero" was not worth what it
+    appeared to be worth.
+
+    Deleting one component at a time duplicates nothing. The spread of the
+    deleted-one estimates gives the standard error, scaled by the usual
+    (k-1)/k factor, and the interval is Student-t with k-1 degrees of freedom
+    because the component count, not the sequence count, is the sample size.
+
+    The arithmetic happens on the Fisher z scale and is inverted at the end.
+    A plain t interval on a correlation is unbounded and the gate for this
+    function duly produced [0.309, 1.168], an upper bound no correlation can
+    reach. Transforming first keeps both bounds inside (-1, 1) and is the
+    usual remedy for the skew of a correlation near its limits. The interval
+    is therefore not symmetric about the observed value, which is the point.
+    """
+    y, predicted = np.asarray(y), np.asarray(predicted)
+    by_group = group_rows(groups)
+    keys = list(by_group)
+    if len(keys) < 3:
+        return None, None
+
+    observed = spearmanr(predicted, y).statistic
+    if not np.isfinite(observed):
+        return None, None
+
+    deleted = []
+    for held_out in keys:
+        rows = [i for key, members in by_group.items() if key != held_out
+                for i in members]
+        if len(set(y[rows])) < 3:
+            continue
+        score = spearmanr(predicted[rows], y[rows]).statistic
+        if np.isfinite(score):
+            deleted.append(float(score))
+
+    if len(deleted) < 3:
+        return None, None
+
+    # arctanh is infinite at exactly +-1, which a rank correlation can reach
+    # on a small resample, so the inputs are nudged inside the open interval.
+    def to_z(value: float) -> float:
+        return math.atanh(min(max(value, -1.0 + 1e-12), 1.0 - 1e-12))
+
+    count = len(deleted)
+    z_deleted = np.array([to_z(value) for value in deleted])
+    spread = z_deleted - z_deleted.mean()
+    standard_error = math.sqrt((count - 1) / count * float((spread ** 2).sum()))
+    half = t.ppf(0.5 + confidence / 2, count - 1) * standard_error
+
+    centre = to_z(float(observed))
+    return (round(math.tanh(centre - half), 3),
+            round(math.tanh(centre + half), 3))
 
 
 def permutation_p(y, predicted, groups, n: int = 1000, seed: int = 0) -> float:
