@@ -81,13 +81,28 @@ PY
 
 echo
 echo "########## 2. fold three, and check the features before folding the rest #"
-(
-  source /project/6122149/purav/igem-toronto/activate_esmfold2.sh
-  export HF_HUB_OFFLINE=1 PYTHONNOUSERSITE=1
-  python scripts/fold_labels.py --sequences "${FASTA}" --out "${GATE}" --limit 3
-)
+# Job 6355027 already folded these three with this code and its output was
+# checked by hand: three 15-column rows and a (3, 256) pair embedding. Twelve
+# minutes of L40S is worth not spending twice.
+PRIOR_GATE=logs/structure-6355027/gate.npz
+if [ -f "${PRIOR_GATE}" ]; then
+  echo "reusing ${PRIOR_GATE} from job 6355027"
+  GATE="${PRIOR_GATE}"
+else
+  (
+    source /project/6122149/purav/igem-toronto/activate_esmfold2.sh
+    export HF_HUB_OFFLINE=1 PYTHONNOUSERSITE=1
+    python scripts/fold_labels.py --sequences "${FASTA}" --out "${GATE}" \
+      --limit 3
+  )
+fi
 
-GATE="${GATE}" python3 - <<'PY'
+# In its own subshell with the environment loaded. Job 6355027 ran this block
+# bare and it died on "No module named numpy", because numpy comes from the
+# cluster's modules and nothing outside the subshells had loaded them.
+(
+  source activate_petabite.sh >/dev/null 2>&1
+  GATE="${GATE}" python - <<'PY'
 import os
 import numpy as np
 
@@ -143,6 +158,7 @@ if failures:
     raise SystemExit(1)
 print("the features are sane; folding the rest")
 PY
+)
 
 echo
 echo "########## 3. fold everything ##########"
