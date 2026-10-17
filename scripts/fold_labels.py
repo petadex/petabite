@@ -250,6 +250,29 @@ def main() -> int:
     scalars: list[list[float]] = []
     embeddings: list[np.ndarray] = []
     columns: list[str] | None = None
+
+    # Resume, because job 6355499 was requeued onto another node two minutes
+    # in and started again from nothing. Over a run of several hours that
+    # would eventually cost the lot, and the structures already written are
+    # perfectly good: folding is deterministic at a fixed seed and nothing
+    # about one sequence depends on another.
+    if args.out.exists():
+        done = np.load(args.out, allow_pickle=False)
+        rows = [str(name) for name in done["names"]]
+        columns = [str(column) for column in done["columns"]]
+        scalars = [list(row) for row in done["scalars"]]
+        if "pair_embedding" in done:
+            embeddings = [row for row in done["pair_embedding"]]
+        else:
+            embeddings = [np.zeros(1, dtype=np.float32)] * len(rows)
+        finished = set(rows)
+        names = [name for name in names if name not in finished]
+        print(f"resuming: {len(finished)} already folded, "
+              f"{len(names)} to go")
+        if not names:
+            print("nothing left to fold")
+            return 0
+
     started = time.time()
 
     for position, name in enumerate(names, start=1):
@@ -277,9 +300,10 @@ def main() -> int:
 
         if position == 1 or position % 5 == 0 or position == len(names):
             elapsed = time.time() - started
-            print(f"  {position}/{len(names)}  {elapsed / position:.1f}s each, "
-                  f"{elapsed / 60:.1f}min so far, "
-                  f"{(len(names) - position) * elapsed / position / 60:.0f}min left")
+            print(f"  {len(rows)} done, {position}/{len(names)} this run, "
+                  f"{elapsed / position:.1f}s each, "
+                  f"{(len(names) - position) * elapsed / position / 60:.0f}"
+                  f"min left")
             payload = {
                 "names": np.array(rows),
                 "columns": np.array(columns),
