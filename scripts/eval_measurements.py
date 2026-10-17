@@ -607,7 +607,8 @@ def null_calibration(target: str, block: str, include_llm: bool,
     outcomes: dict[str, dict] = {}
 
     for null in ("permuted", "gaussian"):
-        scores, pvalues, excluded = [], [], 0
+        scores, pvalues = [], []
+        excluded, excluded_jackknife = 0, 0
         for _ in range(draws):
             if null == "permuted":
                 fake = y[rng.permutation(len(y))]
@@ -634,6 +635,13 @@ def null_calibration(target: str, block: str, include_llm: bool,
             if low is not None and high is not None and low * high > 0:
                 excluded += 1
 
+            # The same question asked of the jackknife interval, which never
+            # duplicates a component, so the two can be compared on the one
+            # thing that matters: how often each is wrong under a true null.
+            low, high = stats.jackknife_ci(medians, averaged, sequence_groups)
+            if low is not None and high is not None and low * high > 0:
+                excluded_jackknife += 1
+
         absolute = np.abs(scores)
         outcomes[null] = {
             "draws": len(scores),
@@ -646,7 +654,9 @@ def null_calibration(target: str, block: str, include_llm: bool,
             "share_above_0.5": round(float(np.mean(absolute > 0.5)), 3),
             "share_p_below_0.01": round(
                 float(np.mean([v < 0.01 for v in pvalues])), 3),
-            "share_ci_excludes_zero": round(excluded / len(scores), 3),
+            "share_bootstrap_excludes_zero": round(excluded / len(scores), 3),
+            "share_jackknife_excludes_zero": round(
+                excluded_jackknife / len(scores), 3),
         }
         summary = outcomes[null]
         print(f"  {null} target, {summary['draws']} draws:")
@@ -658,8 +668,9 @@ def null_calibration(target: str, block: str, include_llm: bool,
               f"draws, above 0.5 in {summary['share_above_0.5']:.0%}")
         print(f"    permutation p below 0.01 in "
               f"{summary['share_p_below_0.01']:.0%} of draws")
-        print(f"    bootstrap interval excludes zero in "
-              f"{summary['share_ci_excludes_zero']:.0%} of draws")
+        print(f"    excludes zero, nominal 5%:  bootstrap "
+              f"{summary['share_bootstrap_excludes_zero']:.0%}  jackknife "
+              f"{summary['share_jackknife_excludes_zero']:.0%}")
         print()
 
     return {"target": target, "block": block, "n_measurements": len(y),
