@@ -48,12 +48,13 @@ from sklearn.model_selection import GroupKFold
 
 from petabite.eval_module import conditions, labels, stats
 
-# The sequence feature blocks, in the order they are reported. `length` and
+# The sequence feature blocks reported by default, in order. `length` and
 # `composition` are the controls a backbone has to beat; `none` is the
-# protocol-only baseline that every sequence block has to beat in turn.
+# protocol-only baseline that every sequence block has to beat in turn. Any
+# other set can be named with --blocks, which is how the cached per-layer
+# embeddings are scored through this same path rather than a parallel one.
 SEQUENCE_BLOCKS = ("none", "length", "composition", "stock", "plasticesm")
 CONTROLS = ("length", "composition")
-MODELS = ("stock", "plasticesm")
 
 # A target needs enough measurements to be worth modelling at this level, on
 # top of the sequence and component minimums the aggregated sweep applies.
@@ -68,8 +69,9 @@ def read_rows(target: str, include_llm: bool,
 
 
 def build_blocks(measurements: list[labels.Measurement],
-                 index: dict[str, int],
-                 cached) -> tuple[dict[str, np.ndarray], np.ndarray, list[str]]:
+                 index: dict[str, int], cached,
+                 block_names: tuple[str, ...] = SEQUENCE_BLOCKS
+                 ) -> tuple[dict[str, np.ndarray], np.ndarray, list[str]]:
     """Expand the per-sequence feature blocks to one row per measurement.
 
     A sequence measured eight times contributes its embedding eight times.
@@ -80,7 +82,7 @@ def build_blocks(measurements: list[labels.Measurement],
     rows = np.array([index[m.seq_md5] for m in measurements], dtype=int)
 
     blocks: dict[str, np.ndarray] = {}
-    for name in SEQUENCE_BLOCKS:
+    for name in block_names:
         if name == "none":
             continue
         blocks[name] = np.asarray(cached[name], dtype=np.float64)[rows]
@@ -206,13 +208,19 @@ def score_set(x: np.ndarray, y: np.ndarray, groups: list[str],
 
 
 def verdict(scores: dict[str, float | None]) -> str:
-    """Whether a backbone beat both controls, and whether anything beat the
-    protocol-only baseline."""
+    """Whether a model beat both controls, and whether anything beat the
+    protocol-only baseline.
+
+    Anything that is neither a named control nor the protocol-only baseline
+    counts as a model, so naming a different block set does not quietly leave
+    the new blocks out of the comparison.
+    """
     baseline = scores.get("none")
-    control = max((scores[name] for name in CONTROLS
-                   if scores.get(name) is not None), default=None)
-    model = max((scores[name] for name in MODELS
-                 if scores.get(name) is not None), default=None)
+    control = max((value for name, value in scores.items()
+                   if name in CONTROLS and value is not None), default=None)
+    model = max((value for name, value in scores.items()
+                 if name not in CONTROLS and name != "none"
+                 and value is not None), default=None)
 
     if control is None or model is None:
         return "unscoreable"
@@ -229,7 +237,8 @@ def verdict(scores: dict[str, float | None]) -> str:
 
 
 def evaluate(target: str, include_llm: bool, index: dict[str, int], cached,
-             standardise: bool) -> dict | None:
+             standardise: bool,
+             block_names: tuple[str, ...] = SEQUENCE_BLOCKS) -> dict | None:
     """Everything reported for one target."""
     measurements = read_rows(target, include_llm, index)
     components = labels.read_components()
@@ -247,7 +256,8 @@ def evaluate(target: str, include_llm: bool, index: dict[str, int], cached,
     print(header)
 
     y = np.array([m.value for m in measurements])
-    blocks, protocol, protocol_names = build_blocks(measurements, index, cached)
+    blocks, protocol, protocol_names = build_blocks(measurements, index,
+                                                    cached, block_names)
 
     repeats = collections.Counter(m.seq_md5 for m in measurements)
     print(f"  measurements per sequence: median "
@@ -277,7 +287,7 @@ def evaluate(target: str, include_llm: bool, index: dict[str, int], cached,
     scores_with_protocol: dict[str, float | None] = {}
     scores_alone: dict[str, float | None] = {}
 
-    for name in SEQUENCE_BLOCKS:
+    for name in block_names:
         block = blocks.get(name)
         variants = [("with_protocol", join(block, protocol))]
         if block is not None:
@@ -308,6 +318,54 @@ def evaluate(target: str, include_llm: bool, index: dict[str, int], cached,
     return result
 
 
+
+
+def decompose(measurements: list[labels.Measurement], predicted: np.ndarray,
+              components: dict[str, str]) -> dict:
+    """Split a correlation into its between-family and within-family parts.
+
+    A homology-controlled score can still be family recognition rather than
+    function prediction, and the two look identical in one number. They come
+    apart here. The between-family part correlates each component's mean
+    prediction against its mean target, which is what family recognition
+    would produce. The within-family part centres both vectors inside each
+    component first, so only the ordering of sequences against their own
+    relatives survives, which is what a protein engineer would actually use.
+
+    Fold centring does not settle this on its own. It removes the level of
+    each fold, and when one component fills a whole fold that is the same as
+    centring on that component, but when a fold holds several components the
+    contrast between them stays in.
+    """
+    averaged, medians, groups = collapse_to_sequences(measurements, predicted,
+                                                      components)
+    rows = stats.group_rows(groups)
+
+    between_predicted, between_truth, sizes = [], [], []
+    within_predicted, within_truth = [], []
+    for members in rows.values():
+        members = np.array(members)
+        between_predicted.append(float(averaged[members].mean()))
+        between_truth.append(float(medians[members].mean()))
+        sizes.append(len(members))
+        if len(members) > 1:
+            within_predicted.extend(averaged[members]
+                                    - averaged[members].mean())
+            within_truth.extend(medians[members] - medians[members].mean())
+
+    def correlate(left, right):
+        if len(left) < 5:
+            return None
+        score = spearmanr(left, right).statistic
+        return round(float(score), 3) if np.isfinite(score) else None
+
+    return {
+        "n_components": len(rows),
+        "largest_component_share": round(max(sizes) / sum(sizes), 3),
+        "between_families": correlate(between_predicted, between_truth),
+        "within_families": correlate(within_predicted, within_truth),
+        "n_within_pairs": len(within_predicted),
+    }
 
 def predict_with_folds(x: np.ndarray, y: np.ndarray, groups: list[str],
                        folds, standardise: bool) -> np.ndarray:
@@ -391,7 +449,8 @@ def stress(target: str, block: str, include_llm: bool,
     components = labels.read_components()
     groups = [components[m.seq_md5] for m in measurements]
     y = np.array([m.value for m in measurements])
-    blocks, protocol, _ = build_blocks(measurements, index, cached)
+    blocks, protocol, _ = build_blocks(measurements, index, cached,
+                                       ("none", block))
 
     if block == "none":
         x = join(None, protocol)
@@ -419,7 +478,20 @@ def stress(target: str, block: str, include_llm: bool,
         print(f"  {label:14} {score}")
     print()
 
-    # 2. Forty random component-to-fold assignments.
+    # 2. Where the signal lives. A homology-controlled number can still be
+    #    family recognition rather than function prediction.
+    predicted = stats.grouped_out_of_fold(x, y, groups, n_splits=5,
+                                          standardise=True)
+    split = decompose(measurements, predicted, components)
+    result["decomposition"] = split
+    print(f"  largest component holds "
+          f"{split['largest_component_share']:.0%} of the sequences")
+    print(f"  between families {split['between_families']}  "
+          f"within families {split['within_families']} "
+          f"over {split['n_within_pairs']} sequences")
+    print()
+
+    # 3. Forty random component-to-fold assignments.
     rng = random.Random(seed)
     scores = []
     for _ in range(trials):
@@ -446,7 +518,7 @@ def stress(target: str, block: str, include_llm: bool,
               f"above zero {summary['share_above_zero']:.0%}")
     print()
 
-    # 3. Each component dropped in turn. With few components this is the
+    # 4. Each component dropped in turn. With few components this is the
     #    harshest of the three, which is the point: if one family carries the
     #    correlation, removing it has to show.
     dropped = {}
@@ -480,6 +552,10 @@ def main() -> int:
                         help="z-score features per fold, fitted on the "
                              "training rows only")
     parser.add_argument("--include-llm", action="store_true")
+    parser.add_argument("--blocks", default=",".join(SEQUENCE_BLOCKS),
+                        help="comma separated feature blocks to score; names "
+                             "must be keys in the embeddings file, plus "
+                             "'none' for the protocol-only baseline")
     parser.add_argument("--stress", default="",
                         help="instead of the sweep, stress this feature "
                              "block on the chosen targets")
@@ -494,8 +570,20 @@ def main() -> int:
     chosen = ([t.strip() for t in args.targets.split(",") if t.strip()]
               or list(labels.TARGETS))
 
+    block_names = tuple(name.strip() for name in args.blocks.split(",")
+                        if name.strip())
+    missing = [name for name in block_names
+               if name != "none" and name not in cached]
+    if missing:
+        raise SystemExit(f"not in {args.embeddings}: {missing}")
+
     print(f"embeddings: {len(index)} sequences")
-    print(f"standardised: {args.standardise}, llm labels: {args.include_llm}")
+    if args.stress:
+        print(f"stressing {args.stress}, both raw and standardised")
+    else:
+        print(f"standardised: {args.standardise}")
+        print(f"blocks: {', '.join(block_names)}")
+    print(f"llm labels: {args.include_llm}")
     print()
 
     if args.stress:
@@ -512,7 +600,7 @@ def main() -> int:
     results = {}
     for target in chosen:
         outcome = evaluate(target, args.include_llm, index, cached,
-                           args.standardise)
+                           args.standardise, block_names)
         if outcome is not None:
             results[target] = outcome
 
