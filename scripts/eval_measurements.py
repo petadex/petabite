@@ -353,6 +353,20 @@ def decompose(measurements: list[labels.Measurement], predicted: np.ndarray,
                                     - averaged[members].mean())
             within_truth.extend(medians[members] - medians[members].mean())
 
+    within_predicted = np.asarray(within_predicted, dtype=float)
+    within_truth = np.asarray(within_truth, dtype=float)
+
+    # A prediction that is constant inside each component leaves deviations
+    # that are floating point dust rather than zero, and a rank correlation
+    # will happily order dust and report a number for it. The gate for this
+    # function caught exactly that, reading +0.056 where the honest answer is
+    # that the question does not apply. So a within-family correlation is only
+    # reported when the deviations are real at the scale of the predictions.
+    scale = float(np.abs(averaged).max()) if len(averaged) else 0.0
+    floor = 1e-9 * max(scale, 1.0)
+    degenerate = (len(within_predicted) == 0
+                  or float(np.abs(within_predicted).max()) <= floor)
+
     def correlate(left, right):
         if len(left) < 5:
             return None
@@ -363,8 +377,10 @@ def decompose(measurements: list[labels.Measurement], predicted: np.ndarray,
         "n_components": len(rows),
         "largest_component_share": round(max(sizes) / sum(sizes), 3),
         "between_families": correlate(between_predicted, between_truth),
-        "within_families": correlate(within_predicted, within_truth),
-        "n_within_pairs": len(within_predicted),
+        "within_families": (None if degenerate
+                            else correlate(within_predicted, within_truth)),
+        "within_is_degenerate": degenerate,
+        "n_within_pairs": int(len(within_predicted)),
     }
 
 def predict_with_folds(x: np.ndarray, y: np.ndarray, groups: list[str],
