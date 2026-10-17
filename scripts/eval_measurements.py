@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import dataclasses
 import json
 import random
 from pathlib import Path
@@ -559,6 +560,111 @@ def stress(target: str, block: str, include_llm: bool,
     print()
     return result
 
+
+def null_calibration(target: str, block: str, include_llm: bool,
+                     index: dict[str, int], cached, draws: int,
+                     seed: int) -> dict:
+    """What this pipeline reports when there is nothing to find.
+
+    Written because the melting temperature sweep produced results that cannot
+    be real. A protocol-only baseline scored -0.409 with a permutation p of
+    0.003, sequence length with the protocol scored -0.431 with p of 0.003,
+    and the per-layer scores for one backbone swung +0.47, +0.43, +0.00,
+    +0.25, -0.13, +0.46, +0.53 with no depth structure at all. Controls are
+    not supposed to be significantly anti-predictive, and non-negotiable 4
+    says to debug the metric rather than interpret it when one moves like
+    that.
+
+    The target has eight homology components and one of them holds 82% of the
+    sequences, so the suspicion is that at this component count the whole
+    procedure, alpha selection and fold centring and bootstrap included,
+    manufactures large correlations from noise. That is measurable rather than
+    arguable: hold the features and the group structure fixed, replace the
+    target with noise, and run the real pipeline on it many times.
+
+    Two nulls, because neither alone is conclusive. Permuting the observed
+    values keeps the target's own distribution and destroys only its link to
+    the sequence. Gaussian draws keep nothing but the location and spread. If
+    the procedure reports large correlations and small p-values under both,
+    then no number from this target means anything, however it was obtained.
+    """
+    measurements = read_rows(target, include_llm, index)
+    components = labels.read_components()
+    groups = [components[m.seq_md5] for m in measurements]
+    y = np.array([m.value for m in measurements])
+    blocks, protocol, _ = build_blocks(measurements, index, cached,
+                                       ("none", block))
+    x = join(None, protocol) if block == "none" else join(blocks[block], None)
+
+    sizes = collections.Counter(groups)
+    print(f"null calibration for {block} on {target}")
+    print(f"  {len(y)} measurements, {len(sizes)} components, "
+          f"largest holds {max(sizes.values()) / len(y):.0%}")
+    print(f"  {draws} draws per null, through the real scoring path")
+    print()
+
+    rng = np.random.default_rng(seed)
+    outcomes: dict[str, dict] = {}
+
+    for null in ("permuted", "gaussian"):
+        scores, pvalues, excluded = [], [], 0
+        for _ in range(draws):
+            if null == "permuted":
+                fake = y[rng.permutation(len(y))]
+            else:
+                fake = rng.normal(y.mean(), y.std() or 1.0, size=len(y))
+
+            # The real path, so alpha selection and fold centring are part of
+            # what is being calibrated rather than excluded from it.
+            predicted = stats.grouped_out_of_fold(x, fake, groups, n_splits=5,
+                                                  standardise=True)
+            fake_rows = [dataclasses.replace(m, value=float(value))
+                         for m, value in zip(measurements, fake)]
+            averaged, medians, sequence_groups = collapse_to_sequences(
+                fake_rows, predicted, components)
+
+            score = spearmanr(averaged, medians).statistic
+            if not np.isfinite(score):
+                continue
+            scores.append(float(score))
+            pvalues.append(stats.permutation_p(medians, averaged,
+                                               sequence_groups, n=200))
+            low, high = stats.bootstrap_ci(medians, averaged, sequence_groups,
+                                           n=400)
+            if low is not None and high is not None and low * high > 0:
+                excluded += 1
+
+        absolute = np.abs(scores)
+        outcomes[null] = {
+            "draws": len(scores),
+            "mean": round(float(np.mean(scores)), 3),
+            "sd": round(float(np.std(scores)), 3),
+            "abs_p50": round(float(np.percentile(absolute, 50)), 3),
+            "abs_p95": round(float(np.percentile(absolute, 95)), 3),
+            "abs_max": round(float(absolute.max()), 3),
+            "share_above_0.3": round(float(np.mean(absolute > 0.3)), 3),
+            "share_above_0.5": round(float(np.mean(absolute > 0.5)), 3),
+            "share_p_below_0.01": round(
+                float(np.mean([v < 0.01 for v in pvalues])), 3),
+            "share_ci_excludes_zero": round(excluded / len(scores), 3),
+        }
+        summary = outcomes[null]
+        print(f"  {null} target, {summary['draws']} draws:")
+        print(f"    rho    mean {summary['mean']:+.3f}  "
+              f"sd {summary['sd']:.3f}")
+        print(f"    |rho|  median {summary['abs_p50']:.3f}  "
+              f"95th {summary['abs_p95']:.3f}  max {summary['abs_max']:.3f}")
+        print(f"    |rho| above 0.3 in {summary['share_above_0.3']:.0%} of "
+              f"draws, above 0.5 in {summary['share_above_0.5']:.0%}")
+        print(f"    permutation p below 0.01 in "
+              f"{summary['share_p_below_0.01']:.0%} of draws")
+        print(f"    bootstrap interval excludes zero in "
+              f"{summary['share_ci_excludes_zero']:.0%} of draws")
+        print()
+
+    return {"target": target, "block": block, "n_measurements": len(y),
+            "n_components": len(sizes), "nulls": outcomes}
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--embeddings", type=Path, required=True)
@@ -578,6 +684,10 @@ def main() -> int:
     parser.add_argument("--stress-trials", type=int, default=40,
                         help="random component-to-fold assignments to try")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--null-block", default="",
+                        help="instead of the sweep, measure what the pipeline "
+                             "reports for this block when the target is noise")
+    parser.add_argument("--null-draws", type=int, default=200)
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
@@ -594,13 +704,27 @@ def main() -> int:
         raise SystemExit(f"not in {args.embeddings}: {missing}")
 
     print(f"embeddings: {len(index)} sequences")
-    if args.stress:
+    if args.null_block:
+        print(f"null calibration for {args.null_block}")
+    elif args.stress:
         print(f"stressing {args.stress}, both raw and standardised")
     else:
         print(f"standardised: {args.standardise}")
         print(f"blocks: {', '.join(block_names)}")
     print(f"llm labels: {args.include_llm}")
     print()
+
+    if args.null_block:
+        calibrated = {target: null_calibration(target, args.null_block,
+                                               args.include_llm, index,
+                                               cached, args.null_draws,
+                                               args.seed)
+                      for target in chosen}
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(calibrated, indent=2))
+            print(f"wrote {args.out}")
+        return 0
 
     if args.stress:
         stressed = {target: stress(target, args.stress, args.include_llm,
