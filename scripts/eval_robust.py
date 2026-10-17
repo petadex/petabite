@@ -1,39 +1,46 @@
-"""Stress the one positive result until it breaks, or does not.
+"""Stress a candidate result until it breaks, or does not.
 
-The substrate-stratified sweep found both backbones clearing both controls on
-p-nitrophenyl butyrate, with bootstrap intervals excluding zero. It is the only
-homology-controlled positive result the project has, so everything downstream
-depends on whether it is real, and a single number from a single fold
-assignment is not enough to decide that.
-
-Four stresses, each targeting a different way the result could be an artefact.
-
-  families     Refit with each homology component dropped in turn. If one
-               family carries the whole correlation, removing it collapses
-               the score, and 22 families means one of them is 5% of the
-               data but could be much more of the signal.
+A single number from a single fold assignment is not enough to decide whether
+a correlation is real, so anything that clears the controls comes here before
+it is reported. Three stresses run inside one invocation and the fourth is the
+invocation itself, repeated with and without `--standardise`.
 
   folds        GroupKFold assigns components to folds deterministically by
                size. Reshuffling that assignment many times gives a
                distribution rather than a point, and a result that only holds
                for one assignment is not a result.
 
-  loco         Leave one component out, the limiting case: the most training
-               data per fold and the most folds. It should agree with 5-fold.
+  families     Refit with each homology component dropped in turn. If one
+               family carries the whole correlation, removing it collapses
+               the score. A score that *rises* when the largest family goes
+               is the same warning read from the other side.
 
   alphas       Score at each fixed ridge penalty rather than selecting one
                nested. A correlation that exists only at the selected alpha
                is a selection artefact.
 
-`--standardise` repeats everything with features z-scored per fold. It
-matters because a ridge penalty is not scale invariant and the cached
-embeddings have a column standard deviation of 0.008, so the alpha grid means
-something very different for them than for a single length column. A result
-that holds both ways is not an artefact of the penalty.
+  standardise  A ridge penalty is not scale invariant, and the cached
+               embeddings have a column standard deviation of 0.008 against
+               42 for a radius of gyration, so one alpha grid over all of
+               them compares penalties rather than representations. A result
+               that holds raw and standardised is not an artefact of scale.
+
+Every pooled score here is fold-centred, which it was not when this script was
+written: `score_with_folds` and `alpha_sensitivity` pooled raw predictions,
+so the three stresses disagreed with the headline they were stressing and any
+number they produced before this fix is withdrawn. Leave-one-component-out is
+gone for the same reason it is gone from the sweep: a fold holding a single
+sequence has no within-fold ordering, so it cannot be centred and cannot be
+scored.
+
+Either feature source can be stressed. `--embeddings` gives length,
+composition and the two backbones; `--structures` adds the ESMFold2 blocks.
+`--substrate` is optional and restricts to one substrate stratum.
 
 Usage:
     python scripts/eval_robust.py --embeddings logs/label_embeddings.npz \\
-        --target kcat_over_km --substrate p-np-c4
+        --structures logs/structures/structures.npz \\
+        --target melting_temperature --standardise
 """
 
 from __future__ import annotations
@@ -46,16 +53,21 @@ import numpy as np
 from scipy.stats import spearmanr
 from sklearn.model_selection import GroupKFold
 
-from petabite.eval_module import labels, stats
+from petabite.eval_module import labels, stats, structures
 
 FEATURE_SETS = ("length", "composition", "stock", "plasticesm")
 
 
-def restrict(target: str, substrate: str, include_llm: bool,
+def restrict(target: str, substrate: str | None, include_llm: bool,
              components: dict[str, str], index: dict[str, int]):
-    """Per-sequence values for one target on one substrate, aligned to cache."""
+    """Per-sequence values for one target, aligned to the feature cache.
+
+    `substrate` of None takes every measurement of the target, which is what
+    the sweep and the structure scoring both do. Naming one restricts to that
+    stratum.
+    """
     measurements = [m for m in labels.read_measurements(target, include_llm)
-                    if m.substrate == substrate]
+                    if substrate is None or m.substrate == substrate]
     per_sequence = labels.aggregate(measurements)
 
     usable = sorted(md5 for md5 in per_sequence if md5 in index)
@@ -86,15 +98,21 @@ def shuffled_group_folds(groups: list[str], rng, n_splits: int = 5):
 
 
 def score_with_folds(x, y, groups, folds, standardise: bool) -> float | None:
-    """Pooled out-of-fold Spearman for a given fold generator."""
+    """Pooled fold-centred out-of-fold Spearman, for a given fold generator.
+
+    The centring is the same one `stats.grouped_out_of_fold` applies and is
+    not optional: without it the pooled vector ranks sequences partly by
+    which fold they landed in, so the stress would be measuring the fold
+    assignment it is varying.
+    """
     predicted = np.zeros_like(y)
     seen = np.zeros(len(y), dtype=bool)
 
     for fit, held in folds:
         inner = [groups[i] for i in fit]
         alpha = stats.pick_alpha(x[fit], y[fit], inner, standardise)
-        predicted[held] = stats.fit_predict(x[fit], y[fit], x[held], alpha,
-                                             standardise)
+        fold = stats.fit_predict(x[fit], y[fit], x[held], alpha, standardise)
+        predicted[held] = stats.centre_fold(fold)
         seen[held] = True
 
     if seen.sum() < 10:
@@ -167,21 +185,26 @@ def alpha_sensitivity(x, y, groups, standardise: bool) -> dict[str, float | None
     for alpha in stats.ALPHAS:
         predicted = np.zeros_like(y)
         for fit, held in splitter.split(x, y, groups):
-            predicted[held] = stats.fit_predict(x[fit], y[fit], x[held], alpha,
-                                                 standardise)
+            fold = stats.fit_predict(x[fit], y[fit], x[held], alpha,
+                                     standardise)
+            predicted[held] = stats.centre_fold(fold)
         score = spearmanr(predicted, y).statistic
         out[str(alpha)] = round(float(score), 3) if np.isfinite(score) else None
     return out
 
 
-def examine(name: str, x, y, groups, standardise: bool) -> dict:
+def examine(name: str, x, y, groups, standardise: bool,
+            permutations: int) -> dict:
     """Every stress, for one feature set."""
     print(f"  {name}")
 
     headline = stats.grouped_out_of_fold(x, y, groups, n_splits=5,
                                          standardise=standardise)
     rho = spearmanr(headline, y).statistic
-    print(f"    headline grouped 5-fold rho {rho:+.3f}")
+    low, high = stats.jackknife_ci(y, headline, groups)
+    p = stats.permutation_p(y, headline, groups, n=permutations)
+    print(f"    headline grouped 5-fold rho {rho:+.3f}  "
+          f"jackknife [{low}, {high}]  p {p} over {permutations} draws")
 
     folds = fold_sensitivity(x, y, groups, standardise)
     if folds:
@@ -189,12 +212,6 @@ def examine(name: str, x, y, groups, standardise: bool) -> dict:
               f"mean {folds['mean']:+.3f} sd {folds['sd']:.3f}, "
               f"range {folds['min']:+.3f} to {folds['max']:+.3f}, "
               f"{folds['share_above_zero']:.0%} above zero")
-
-    loco_predicted = stats.grouped_out_of_fold(x, y, groups, n_splits=None,
-                                               standardise=standardise)
-    loco = spearmanr(loco_predicted, y).statistic
-    loco = float(loco) if np.isfinite(loco) else None
-    print(f"    leave-one-component-out rho {loco:+.3f}")
 
     dropped = drop_one_family(x, y, groups, standardise)
     if dropped:
@@ -207,7 +224,9 @@ def examine(name: str, x, y, groups, standardise: bool) -> dict:
 
     return {
         "headline_kfold5": round(float(rho), 3) if np.isfinite(rho) else None,
-        "loco": round(loco, 3) if loco is not None else None,
+        "jackknife95": [low, high],
+        "permutation_p": p,
+        "n_permutations": permutations,
         "fold_sensitivity": folds,
         "drop_one_family": dropped,
         "alpha_sensitivity": alphas,
@@ -217,8 +236,16 @@ def examine(name: str, x, y, groups, standardise: bool) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--embeddings", type=Path, required=True)
+    parser.add_argument("--structures", type=Path, default=None,
+                        help="the ESMFold2 feature table, to stress the "
+                             "structure blocks alongside the controls")
     parser.add_argument("--target", required=True)
-    parser.add_argument("--substrate", required=True)
+    parser.add_argument("--substrate", default=None,
+                        help="restrict to one substrate stratum; the default "
+                             "takes every measurement of the target")
+    parser.add_argument("--permutations", type=int, default=1000,
+                        help="draws for the permutation test; 1000 resolves a "
+                             "p of 0.01 only to within a factor of two")
     parser.add_argument("--include-llm", action="store_true")
     parser.add_argument("--standardise", action="store_true",
                         help="z-score features per fold, so the alpha grid "
@@ -228,31 +255,61 @@ def main() -> int:
 
     cached = np.load(args.embeddings, allow_pickle=False)
     index = {name: position for position, name in enumerate(cached["names"])}
-    features = {key: cached[key] for key in FEATURE_SETS}
     components = labels.read_components()
 
     y, groups, rows = restrict(args.target, args.substrate, args.include_llm,
                                components, index)
-    print(f"{args.target} on {args.substrate}: {len(y)} sequences, "
-          f"{len(set(groups))} components\n")
+    where = args.substrate or "every substrate"
+    print(f"{args.target} on {where}: {len(y)} sequences, "
+          f"{len(set(groups))} components")
 
-    print(f"standardised: {args.standardise}\n")
-    results = {name: examine(name, features[name][rows], y, groups,
-                             args.standardise)
-               for name in FEATURE_SETS}
+    blocks = {name: cached[name][rows] for name in FEATURE_SETS}
+
+    if args.structures is not None:
+        # Only the folded sequences can be compared, and the controls have to
+        # be cut down to exactly the same rows or the comparison is between
+        # two different datasets.
+        folded, scalars, columns, embedding = structures.load(args.structures)
+        names = list(cached["names"])
+        keep = np.array([names[row] in folded for row in rows])
+        structure_rows = np.array([folded[names[row]] for row in rows[keep]],
+                                  dtype=int)
+        blocks = {name: block[keep] for name, block in blocks.items()}
+        blocks.update(structures.build_blocks(scalars, columns, embedding,
+                                              structure_rows))
+        y, groups = y[keep], [g for g, k in zip(groups, keep) if k]
+        print(f"folded: {len(y)} sequences, {len(set(groups))} components")
+
+        # A block with a nan anywhere cannot be handed to a ridge, and
+        # dropping those rows from one block only would again compare
+        # different datasets, so they go from all of them.
+        finite = np.ones(len(y), dtype=bool)
+        for block in blocks.values():
+            finite &= structures.usable(block)
+        if not finite.all():
+            blocks = {name: block[finite] for name, block in blocks.items()}
+            y, groups = y[finite], [g for g, k in zip(groups, finite) if k]
+            print(f"finite in every block: {len(y)} sequences, "
+                  f"{len(set(groups))} components")
+
+    print(f"\nstandardised: {args.standardise}\n")
+    results = {name: examine(name, block, y, groups, args.standardise,
+                             args.permutations)
+               for name, block in blocks.items()}
 
     print()
     print("=" * 70)
-    print(f"{'feature set':13} {'kfold5':>8} {'loco':>8} {'shuffled':>10} "
-          f"{'worst drop':>11}")
+    print(f"{'feature set':15} {'kfold5':>8} {'shuffled':>10} {'sd':>7} "
+          f"{'worst drop':>11} {'best drop':>10}")
     for name, result in results.items():
         folds = result["fold_sensitivity"]
         dropped = result["drop_one_family"]
-        print(f"{name:13} {str(result['headline_kfold5']):>8} "
-              f"{str(result['loco']):>8} "
-              f"{str(folds.get('mean')):>10} {str(dropped.get('min')):>11}")
+        print(f"{name:15} {str(result['headline_kfold5']):>8} "
+              f"{str(folds.get('mean')):>10} {str(folds.get('sd')):>7} "
+              f"{str(dropped.get('min')):>11} {str(dropped.get('max')):>10}")
     print("=" * 70)
-    print("A result that holds under all four columns is worth reporting.")
+    print("A result that holds across every column, and again under the other")
+    print("setting of --standardise, is worth reporting. Nothing less is.")
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

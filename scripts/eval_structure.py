@@ -38,70 +38,15 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import spearmanr
 
-from petabite.eval_module import labels, stats
+from petabite.eval_module import labels, stats, structures
 
 CONTROLS = ("length", "composition")
 BACKBONES = ("stock", "plasticesm")
 
-# Which scalar columns belong to which group. Named here rather than inferred
-# so that a column added to the folding script cannot quietly join a group.
-GROUPS = {
-    "confidence": ("ptm", "plddt_mean", "plddt_min", "plddt_sd",
-                   "plddt_confident_fraction"),
-    "geometry": ("radius_of_gyration", "compactness", "end_to_end",
-                 "contact_density", "mean_neighbours", "sd_neighbours",
-                 "surface_fraction"),
-    "secondary": ("helix", "sheet", "loop"),
-}
-
-
-def load_structures(path: Path) -> tuple[dict[str, int], np.ndarray,
-                                         list[str], np.ndarray | None]:
-    """The folded set: an index, the scalar table, its columns, the embedding."""
-    cached = np.load(path, allow_pickle=False)
-    names = list(cached["names"])
-    index = {name: position for position, name in enumerate(names)}
-    columns = [str(c) for c in cached["columns"]]
-    embedding = (cached["pair_embedding"] if "pair_embedding" in cached
-                 else None)
-    return index, cached["scalars"], columns, embedding
-
-
-def build_blocks(scalars: np.ndarray, columns: list[str],
-                 embedding: np.ndarray | None,
-                 rows: np.ndarray) -> dict[str, np.ndarray]:
-    """One feature block per group, plus the union and the embedding."""
-    position = {name: column for column, name in enumerate(columns)}
-    blocks: dict[str, np.ndarray] = {}
-
-    for group, wanted in GROUPS.items():
-        present = [position[name] for name in wanted if name in position]
-        if present:
-            blocks[group] = scalars[np.ix_(rows, present)].astype(np.float64)
-
-    everything = sorted({c for wanted in GROUPS.values() for c in wanted
-                         if c in position})
-    blocks["structure_all"] = scalars[
-        np.ix_(rows, [position[c] for c in everything])].astype(np.float64)
-
-    if embedding is not None and embedding.shape[1] > 1:
-        blocks["pair_embedding"] = embedding[rows].astype(np.float64)
-    return blocks
-
-
-def usable(block: np.ndarray) -> np.ndarray:
-    """Rows where every column is finite.
-
-    Secondary structure is nan where a predicted backbone was incomplete, and
-    a ridge cannot be handed a nan, so those rows are dropped from that group
-    only rather than from the whole table.
-    """
-    return np.isfinite(block).all(axis=1)
-
 
 def score_block(x: np.ndarray, y: np.ndarray, groups: list[str]) -> dict:
     """The standard protocol, identical to every other score in the project."""
-    keep = usable(x)
+    keep = structures.usable(x)
     if keep.sum() < labels.MIN_SEQUENCES:
         return {"dim": int(x.shape[1]), "n": int(keep.sum()),
                 "spearman": None, "note": "too few finite rows"}
@@ -169,7 +114,7 @@ def evaluate(target: str, structure_index: dict[str, int],
     structure_rows = np.array([structure_index[name] for name in names])
     embedding_rows = np.array([embedding_index[name] for name in names])
 
-    blocks = build_blocks(scalars, columns, embedding, structure_rows)
+    blocks = structures.build_blocks(scalars, columns, embedding, structure_rows)
     for name in CONTROLS + BACKBONES:
         blocks[name] = np.asarray(cached[name],
                                   dtype=np.float64)[embedding_rows]
@@ -214,7 +159,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
-    structure_index, scalars, columns, embedding = load_structures(
+    structure_index, scalars, columns, embedding = structures.load(
         args.structures)
     cached = np.load(args.embeddings, allow_pickle=False)
     embedding_index = {name: position
