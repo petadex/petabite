@@ -1,9 +1,11 @@
 #!/bin/bash
 # Stage 1 production run: one epoch of MLM LoRA over the 60%-identity corpus.
 #
-# The corpus is 1,814,215 sequences and 544,580,912 tokens. At the measured
-# 27.5k tokens/s on one L40S that is about 5.5 h, so this CANNOT go to
-# gpubase_l40s_b1 or gpubase_interac, whose limit is 3 h. b2 allows 12 h.
+# The corpus is about 1.81M sequences and 545M tokens (the first build, which
+# excluded only centroid-level label matches, was 1,814,215 and 544,580,912; the
+# exact figures are in the corpus manifest.json). At the measured 27.5k tokens/s
+# on one L40S that is about 5.5 h, so this CANNOT go to gpubase_l40s_b1 or
+# gpubase_interac, whose limit is 3 h. b2 allows 12 h.
 #
 # Build the corpus first:
 #     python scripts/build_c60_corpus.py --out /project/.../c60-seed0 --seed 0

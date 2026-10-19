@@ -38,6 +38,8 @@ model:
   lora_r: 32
   # alpha/r is the scaling applied to the low-rank branch, so 64/32 scales it
   # by 2.0. alpha below r damps the adapter, which is rarely what is wanted.
+  # Runs before 2026-10-16 used 16 (scaling 0.5). The change acts like a 4x
+  # larger step on the adapters, so those runs are not comparable with these.
   lora_alpha: 64
   lora_dropout: 0.01
 
