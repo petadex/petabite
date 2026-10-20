@@ -18,33 +18,52 @@ corpus and its ORFs are called stop to stop.
 
 This script draws one member per cluster uniformly at random, seeded. That is
 unbiased with respect to origin and length, and re-running with a different
-``--seed`` draws a different corpus of the same size, which is how a multi-epoch
-run gets fresh members instead of repeating one fixed subset.
+``--seed`` draws a different corpus of the same size. Each seed is a separate
+corpus directory: a multi-epoch run that sees fresh members each epoch means
+training on ``c60-seed0``, then ``c60-seed1``, and so on. Nothing switches
+corpora mid-run yet, and resuming a checkpoint onto a different corpus would
+misalign the batches the Trainer skips, so that is not wired up here.
 
 Excluding the labelled sequences
 --------------------------------
-Every 60% cluster containing a sequence from the PETai label set is dropped, so
-no downstream evaluation sequence is seen during pretraining in any form. This
-uses the full 1,219-sequence label set rather than one particular split's
+Every 60% cluster containing a sequence from the PETai label set is dropped.
+The clusters are found by looking every labelled md5 up in the full corpus spine
+(``petadex-corpus-full`` ``orfs/``, which has ``md5`` and ``c60_id`` for all
+307,155,746 ORFs), not in the centroid table: only about 120 labelled sequences
+are 90% centroids themselves, and checking centroids alone leaves the clusters
+of the other ~1,100 in the corpus, where a 90% centroid at least 90% identical
+to an evaluation sequence can be drawn.
+
+This uses the full 1,219-sequence label set rather than one particular split's
 val/test, so the exclusion stays valid however the labels are re-split later.
-The cost is negligible: only about 120 labelled sequences are corpus centroids
-at all.
+
+Labelled sequences that are not in the corpus at all (literature mutants, for
+example) cannot be excluded by identity here. Their count goes in the manifest
+and their md5s in ``labels_not_in_corpus.txt``; keeping their homologues out
+needs a sequence search against the centroids.
 
 Usage:
     python scripts/build_c60_corpus.py --out /project/6122149/purav/petabite-tokenized/c60-seed0
-    python scripts/build_c60_corpus.py --out ... --seed 1        # a second epoch's draw
+    python scripts/build_c60_corpus.py --out ... --seed 1        # a different draw
+
+The spine has to be on disk first, for example:
+    hf download petadex/petadex-corpus-full --repo-type dataset --include "orfs/*" \\
+        --local-dir /project/6122149/purav/petadex-corpus/full
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import random
 import time
 from collections import defaultdict
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from datasets import Dataset
 
@@ -53,6 +72,7 @@ from petabite.data_module.tokenization import load_esmc_tokenizer
 CENTROIDS = Path(
     "/project/6122149/purav/petadex-corpus/centroids90/centroids90.parquet"
 )
+ORFS = Path("/project/6122149/purav/petadex-corpus/full/orfs")
 LABEL_SEQUENCES = Path("/project/6122149/purav/petai-labels/combined/sequences.csv")
 
 DEFAULT_MODEL = "biohub/ESMC-300M"
@@ -65,23 +85,82 @@ SHARD_SIZE = 100_000
 TOKENIZE_BATCH = 20_000
 
 
+def corpus_md5(sequence: str) -> str:
+    """The corpus's md5 convention: uppercase, trailing stop removed."""
+    return hashlib.md5(sequence.strip().upper().rstrip("*").encode()).hexdigest()
+
+
 def read_labelled_md5s(path: Path) -> set[str]:
-    """The md5s of every labelled sequence, split-independent."""
+    """The md5s of every labelled sequence, split-independent.
+
+    When the file carries the sequences themselves, the md5 is recomputed with
+    the corpus convention rather than trusted, because a label md5 taken over a
+    lowercase sequence or one ending in ``*`` would silently match nothing.
+    """
     if not path.is_file():
         raise FileNotFoundError(
             f"label set not found at {path}. It is needed to exclude labelled "
             "sequences from the pretraining corpus."
         )
     with path.open(newline="") as handle:
-        md5s = {row["seq_md5"] for row in csv.DictReader(handle)}
-    print(f"label set: {len(md5s):,} sequence md5s to exclude")
+        reader = csv.DictReader(handle)
+        if "sequence" in (reader.fieldnames or []):
+            md5s = {corpus_md5(row["sequence"]) for row in reader if row["sequence"]}
+            source = "recomputed from the sequence column"
+        else:
+            md5s = {row["seq_md5"].strip().lower() for row in reader}
+            source = "seq_md5 column, assumed to follow the corpus convention"
+    print(f"label set: {len(md5s):,} sequence md5s to exclude ({source})")
     return md5s
 
 
+def find_labelled_clusters(
+    orfs: Path, labelled: set[str]
+) -> tuple[set[int], set[str]]:
+    """The 60% clusters holding a labelled sequence anywhere, not only as a centroid.
+
+    Scans ``md5`` and ``c60_id`` over every part of the corpus spine, one row
+    group at a time. Returns the clusters to exclude and the labelled md5s that
+    were found in the corpus.
+    """
+    parts = sorted(orfs.glob("part-*.parquet"))
+    if not parts:
+        raise FileNotFoundError(
+            f"no orfs/part-*.parquet under {orfs}. Download the corpus spine "
+            "(see this script's docstring); it is what maps labelled sequences "
+            "to their 60% clusters."
+        )
+
+    wanted = pa.array(sorted(labelled), type=pa.string())
+    clusters: set[int] = set()
+    found: set[str] = set()
+    started = time.time()
+    for index, part in enumerate(parts):
+        parquet = pq.ParquetFile(part)
+        for group in range(parquet.num_row_groups):
+            table = parquet.read_row_group(group, columns=["md5", "c60_id"])
+            hits = table.filter(pc.is_in(table["md5"], value_set=wanted))
+            clusters.update(hits["c60_id"].to_pylist())
+            found.update(hits["md5"].to_pylist())
+        if (index + 1) % 10 == 0:
+            print(
+                f"  labels: {index + 1}/{len(parts)} parts, {len(found):,} labelled "
+                f"sequences found, {time.time() - started:.0f}s",
+                flush=True,
+            )
+
+    print(
+        f"labels: {len(found):,} of {len(labelled):,} labelled sequences are in the "
+        f"corpus, in {len(clusters):,} 60% clusters; {len(labelled) - len(found):,} "
+        "are not in the corpus and cannot be excluded by identity"
+    )
+    return clusters, found
+
+
 def choose_members(
-    parquet: pq.ParquetFile, labelled: set[str], seed: int
+    parquet: pq.ParquetFile, excluded: set[int], seed: int
 ) -> tuple[dict[int, set[int]], dict]:
-    """Pick one row per 60% cluster, and find the clusters to exclude.
+    """Pick one row per 60% cluster, leaving out the ``excluded`` clusters.
 
     Reservoir sampling of size one: the nth member of a cluster replaces the
     current pick with probability 1/n. One pass, and it holds only a counter and
@@ -93,18 +172,14 @@ def choose_members(
     rng = random.Random(seed)
     seen: dict[int, int] = defaultdict(int)
     picked: dict[int, tuple[int, int]] = {}
-    excluded: set[int] = set()
 
     rows_read = 0
     started = time.time()
     for group in range(parquet.num_row_groups):
-        table = parquet.read_row_group(group, columns=["c60_id", "centroid_md5"])
+        table = parquet.read_row_group(group, columns=["c60_id"])
         c60s = table["c60_id"].to_pylist()
-        md5s = table["centroid_md5"].to_pylist()
 
-        for local, (c60, md5) in enumerate(zip(c60s, md5s)):
-            if md5 in labelled:
-                excluded.add(c60)
+        for local, c60 in enumerate(c60s):
             seen[c60] += 1
             if rng.random() < 1.0 / seen[c60]:
                 picked[c60] = (group, local)
@@ -117,8 +192,10 @@ def choose_members(
                 flush=True,
             )
 
+    dropped = 0
     for cluster in excluded:
-        picked.pop(cluster, None)
+        if picked.pop(cluster, None) is not None:
+            dropped += 1
 
     by_group: dict[int, set[int]] = defaultdict(set)
     for group, local in picked.values():
@@ -127,12 +204,12 @@ def choose_members(
     stats = {
         "rows_scanned": rows_read,
         "clusters_total": len(seen),
-        "clusters_excluded": len(excluded),
+        "clusters_excluded": dropped,
         "sequences_selected": len(picked),
         "pass1_seconds": round(time.time() - started, 1),
     }
     print(
-        f"pass 1 done: {len(seen):,} clusters, {len(excluded)} excluded for holding "
+        f"pass 1 done: {len(seen):,} clusters, {dropped:,} excluded for holding "
         f"a labelled sequence, {len(picked):,} selected"
     )
     return by_group, stats
@@ -212,6 +289,10 @@ def main() -> int:
         help="which member of each cluster to draw; change it for a second epoch",
     )
     parser.add_argument("--centroids", type=Path, default=CENTROIDS)
+    parser.add_argument(
+        "--orfs", type=Path, default=ORFS,
+        help="the corpus spine's orfs/ directory, used to find labelled clusters",
+    )
     parser.add_argument("--labels", type=Path, default=LABEL_SEQUENCES)
     args = parser.parse_args()
 
@@ -220,15 +301,21 @@ def main() -> int:
 
     tokenizer = load_esmc_tokenizer(args.model, args.max_length)
     labelled = read_labelled_md5s(args.labels)
+    excluded, found = find_labelled_clusters(args.orfs, labelled)
     parquet = pq.ParquetFile(args.centroids)
     print(
         f"{args.centroids.name}: {parquet.metadata.num_rows:,} rows in "
         f"{parquet.num_row_groups} row groups"
     )
 
-    by_group, stats = choose_members(parquet, labelled, args.seed)
+    by_group, stats = choose_members(parquet, excluded, args.seed)
     totals = tokenize_selected(
         parquet, by_group, tokenizer, args.max_length, args.out
+    )
+
+    missing = sorted(labelled - found)
+    (args.out / "labels_not_in_corpus.txt").write_text(
+        "".join(f"{md5}\n" for md5 in missing)
     )
 
     manifest = {
@@ -237,7 +324,11 @@ def main() -> int:
         "seed": args.seed,
         "model": args.model,
         "max_length": args.max_length,
-        "excluded": "60% clusters containing any PETai labelled sequence",
+        "excluded": "60% clusters containing any PETai labelled sequence, "
+        "looked up by md5 over every ORF in orfs/",
+        "labels_total": len(labelled),
+        "labels_in_corpus": len(found),
+        "labels_not_in_corpus": len(missing),
         **stats,
         **totals,
         "mean_tokens": round(totals["tokens"] / max(1, totals["sequences"]), 1),
