@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,13 +28,44 @@ MANIFEST_NAME = "manifest.json"
 LENGTH_COLUMN = "length"
 
 
-def load_tokenized(path: str | Path) -> Dataset:
-    """Concatenate the shard datasets under ``path`` into one memory-mapped set.
+def load_tokenized(path: str | Path | Sequence[str | Path]) -> Dataset:
+    """Load one or more pre-tokenized corpora as a single memory-mapped set.
+
+    Several paths are concatenated. That is how a run sees more than one draw
+    of the 60%-identity clusters: ``build_c60_corpus.py --seed 0`` and
+    ``--seed 1`` each pick a different member of every cluster, so loading both
+    gives twice the distinct sequences with the same cluster coverage. That is
+    strictly better than two epochs over one draw, which would show the model
+    each sequence twice and nothing new.
 
     ``concatenate_datasets`` on memory-mapped Arrow tables does not copy the
-    data, so this stays cheap no matter how many shards there are.
+    data, so this stays cheap no matter how many shards or corpora there are,
+    and the result stays in storage order, which is what :func:`read_lengths`
+    requires.
     """
-    path = Path(path)
+    if isinstance(path, (str, Path)):
+        paths = [Path(path)]
+    else:
+        paths = [Path(p) for p in path]
+    if not paths:
+        raise ValueError("no corpus path given")
+
+    if len(paths) > 1:
+        parts = [_load_one(p) for p in paths]
+        combined = concatenate_datasets(parts)
+        logger.info(
+            "Combined %d corpora into %d sequences: %s",
+            len(parts), len(combined),
+            ", ".join(f"{p.name}={len(d):,}" for p, d in zip(paths, parts)),
+        )
+        _check_columns(combined, paths[0])
+        return combined
+
+    return _load_one(paths[0])
+
+
+def _load_one(path: Path) -> Dataset:
+    """Load a single corpus directory's shards."""
     shard_dirs = sorted(p for p in path.glob("shard_*") if p.is_dir())
     if not shard_dirs:
         raise FileNotFoundError(
@@ -59,6 +91,12 @@ def load_tokenized(path: str | Path) -> Dataset:
             path, len(dataset),
         )
 
+    _check_columns(dataset, path)
+    return dataset
+
+
+def _check_columns(dataset: Dataset, path: Path) -> None:
+    """Fail early if a corpus lacks what training and batching need."""
     expected = {"input_ids", LENGTH_COLUMN}
     missing = expected - set(dataset.column_names)
     if missing:
@@ -66,7 +104,6 @@ def load_tokenized(path: str | Path) -> Dataset:
             f"pre-tokenized corpus at {path} is missing columns {sorted(missing)}; "
             f"it has {dataset.column_names}"
         )
-    return dataset
 
 
 def read_lengths(dataset: Dataset) -> np.ndarray:
